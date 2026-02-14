@@ -59,31 +59,46 @@ def cross_entropy_loss(P, y):
 # 3. Forward + backward en une passe
 # ---------------------------------------------------------------------------
 
-def forward_backward(X, y, W, b, n_classes):
+def forward_backward(X, y, W1, b1, W2, b2, n_classes):
     """
-    Forward pass + calcul du gradient.
+    Forward pass + calcul du gradient (réseau 2 couches avec ReLU).
 
-    X: (N, 832) entrées
-    y: (N,) labels
-    W: (C, 832) poids
-    b: (C,) biais
+    X:  (N, D) entrées
+    y:  (N,) labels
+    W1: (H, D) poids couche 1
+    b1: (H,) biais couche 1
+    W2: (C, H) poids couche 2
+    b2: (C,) biais couche 2
 
-    Retourne: loss, dW, db, P
+    Retourne: loss, dW1, db1, dW2, db2, P
     """
     N = X.shape[0]
 
-    Z = X @ W.T + b                    # (N, C)
-    P = softmax(Z)                     # (N, C)
+    # Couche 1 : linéaire + ReLU
+    Z1 = X @ W1.T + b1                 # (N, H)
+    A1 = xp.maximum(Z1, 0)             # (N, H) — ReLU
+
+    # Couche 2 : linéaire + softmax
+    Z2 = A1 @ W2.T + b2                # (N, C)
+    P = softmax(Z2)                    # (N, C)
 
     loss = cross_entropy_loss(P, y)
 
+    # Gradient couche 2
     E = P.copy()                       # (N, C)
-    E[xp.arange(N), y] -= 1.0          # (N, C)
+    E[xp.arange(N), y] -= 1.0
 
-    dW = (E.T @ X) / N                 # (C, 832)
-    db = E.mean(axis=0)                # (C,)
+    dW2 = (E.T @ A1) / N               # (C, H)
+    db2 = E.mean(axis=0)               # (C,)
 
-    return loss, dW, db, P
+    # Backprop vers couche 1
+    dA1 = E @ W2                       # (N, H)
+    dZ1 = dA1 * (Z1 > 0).astype(xp.float32)  # ReLU gradient
+
+    dW1 = (dZ1.T @ X) / N              # (H, D)
+    db1 = dZ1.mean(axis=0)             # (H,)
+
+    return loss, dW1, db1, dW2, db2, P
 
 
 # ---------------------------------------------------------------------------
@@ -256,14 +271,20 @@ def update_plot(history, out_path):
 def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
     """Boucle d'entraînement avec progression live et graphique mis à jour."""
     N, D = X.shape
+    H = config.get("hidden", 512)
     lr = config["lr"]
     batch_size = config["batch_size"]
     epochs = config["epochs"]
 
     # Initialisation des poids (Xavier) — sur GPU si disponible
-    scale = float(np.sqrt(2.0 / (D + n_classes)))
-    W = xp.array(np.random.randn(n_classes, D).astype(np.float32) * scale)
-    b = xp.zeros(n_classes, dtype=xp.float32)
+    scale1 = float(np.sqrt(2.0 / (D + H)))
+    scale2 = float(np.sqrt(2.0 / (H + n_classes)))
+    W1 = xp.array(np.random.randn(H, D).astype(np.float32) * scale1)
+    b1 = xp.zeros(H, dtype=xp.float32)
+    W2 = xp.array(np.random.randn(n_classes, H).astype(np.float32) * scale2)
+    b2 = xp.zeros(n_classes, dtype=xp.float32)
+
+    n_params = H * D + H + n_classes * H + n_classes
 
     # Split train/val (90/10)
     indices = np.random.permutation(N)
@@ -279,13 +300,12 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
     n_batches = len(y_train) // batch_size
 
     print(f"\n{'='*70}")
-    print(f"  ♟  Entraînement du modèle linéaire")
+    print(f"  ♟  Entraînement du modèle (832 → {H} → {n_classes})")
     print(f"{'='*70}")
     print(f"  Exemples train : {len(y_train):,}")
     print(f"  Exemples val   : {len(y_val):,}")
-    print(f"  Features (D)   : {D}")
-    print(f"  Classes (C)    : {n_classes}")
-    print(f"  Paramètres     : {n_classes * D + n_classes:,} ({(n_classes * D + n_classes)*4/1024/1024:.1f} Mo)")
+    print(f"  Architecture   : {D} → {H} (ReLU) → {n_classes} (softmax)")
+    print(f"  Paramètres     : {n_params:,} ({n_params*4/1024/1024:.1f} Mo)")
     print(f"  Learning rate  : {lr}")
     print(f"  Batch size     : {batch_size}")
     print(f"  Epochs         : {epochs}")
@@ -320,12 +340,17 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
             Xb = X_train[start:end].astype(xp.float32)
             yb = y_train[start:end]
 
-            loss, dW, db_grad, _ = forward_backward(Xb, yb, W, b, n_classes)
+            loss, dW1, db1_grad, dW2, db2_grad, _ = forward_backward(
+                Xb, yb, W1, b1, W2, b2, n_classes)
             epoch_loss += float(loss)
-            epoch_grad_norm += float(xp.sqrt((dW ** 2).sum() + (db_grad ** 2).sum()))
+            epoch_grad_norm += float(xp.sqrt(
+                (dW1 ** 2).sum() + (db1_grad ** 2).sum() +
+                (dW2 ** 2).sum() + (db2_grad ** 2).sum()))
 
-            W -= lr * dW
-            b -= lr * db_grad
+            W1 -= lr * dW1
+            b1 -= lr * db1_grad
+            W2 -= lr * dW2
+            b2 -= lr * db2_grad
 
             # Barre de progression toutes les 5 batches
             if (i + 1) % 5 == 0 or i == n_batches - 1:
@@ -343,8 +368,10 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         val_sample = min(2000, len(y_val))
         Xv = X_val[:val_sample].astype(xp.float32)
         yv = y_val[:val_sample]
-        Zv = Xv @ W.T + b
-        Pv = softmax(Zv)
+        Zv1 = Xv @ W1.T + b1
+        Av1 = xp.maximum(Zv1, 0)
+        Zv2 = Av1 @ W2.T + b2
+        Pv = softmax(Zv2)
         val_loss = cross_entropy_loss(Pv, yv)
         val_top1 = accuracy_topk(Pv, yv, k=1)
         val_top5 = accuracy_topk(Pv, yv, k=5)
@@ -389,11 +416,13 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
           f"val={history['val_loss'][-1]:.4f}")
     print(f"{'='*70}")
 
-    # Ramener W, b sur CPU pour la sauvegarde
-    W_cpu = W.get() if GPU else W
-    b_cpu = b.get() if GPU else b
+    # Ramener les poids sur CPU pour la sauvegarde
+    W1_cpu = W1.get() if GPU else W1
+    b1_cpu = b1.get() if GPU else b1
+    W2_cpu = W2.get() if GPU else W2
+    b2_cpu = b2.get() if GPU else b2
 
-    return W_cpu, b_cpu, history
+    return {"W1": W1_cpu, "b1": b1_cpu, "W2": W2_cpu, "b2": b2_cpu}, history
 
 
 # ---------------------------------------------------------------------------
@@ -415,14 +444,15 @@ def run(data_path, model_path="data/model.npz"):
         "lr": 0.01,
         "batch_size": 256,
         "epochs": 20,
+        "hidden": 512,
     }
 
     plot_path = os.path.splitext(model_path)[0] + "_curves.png"
-    W, b, history = train(X, y, n_classes, config, plot_path=plot_path)
+    weights, history = train(X, y, n_classes, config, plot_path=plot_path)
 
-    np.savez_compressed(model_path, W=W, b=b, move_tokens=move_tokens)
+    np.savez_compressed(model_path, **weights, move_tokens=move_tokens)
     print(f"\nModèle sauvegardé dans {model_path}")
-    print(f"  → W: {W.shape}, b: {b.shape}")
+    print(f"  → W1: {weights['W1'].shape}, W2: {weights['W2'].shape}")
     print(f"  → Taille : {os.path.getsize(model_path) / (1024**2):.1f} Mo")
     return model_path
 

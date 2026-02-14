@@ -51,12 +51,14 @@ def board_to_vector(board):
 
 
 def load_model(model_path):
-    """Charge le modèle (W, b, move_tokens)."""
+    """Charge le modèle 2 couches (W1, b1, W2, b2, move_tokens)."""
     data = np.load(model_path)
-    W = xp.array(data["W"])
-    b = xp.array(data["b"])
-    move_tokens = data["move_tokens"]  # (N, 3) : from, to, promotion
-    return W, b, move_tokens
+    W1 = xp.array(data["W1"])
+    b1 = xp.array(data["b1"])
+    W2 = xp.array(data["W2"])
+    b2 = xp.array(data["b2"])
+    move_tokens = data["move_tokens"]
+    return W1, b1, W2, b2, move_tokens
 
 
 def build_token_to_move(move_tokens):
@@ -68,13 +70,17 @@ def build_token_to_move(move_tokens):
     return moves
 
 
-def predict_move(board, W, b, token_to_move):
-    """Prédit le meilleur coup légal."""
+def predict_move(board, W1, b1, W2, b2, token_to_move):
+    """Prédit le meilleur coup légal (réseau 2 couches)."""
     x = board_to_vector(board)
     x_gpu = xp.array(x.reshape(1, -1))
 
-    logits = x_gpu @ W.T + b
-    # Softmax
+    # Couche 1 : ReLU
+    z1 = x_gpu @ W1.T + b1
+    a1 = xp.maximum(z1, 0)
+
+    # Couche 2 : softmax
+    logits = a1 @ W2.T + b2
     logits = logits - logits.max()
     probs = xp.exp(logits)
     probs = probs / probs.sum()
@@ -99,14 +105,14 @@ def predict_move(board, W, b, token_to_move):
 
 # ── Partie ──────────────────────────────────────────────────────────────────
 
-def play_game(W, b, token_to_move, engine, model_color, time_limit=0.1):
+def play_game(W1, b1, W2, b2, token_to_move, engine, model_color, time_limit=0.1):
     """Joue une partie complète. Retourne le résultat du point de vue du modèle."""
     board = chess.Board()
     move_count = 0
 
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
-            move, prob = predict_move(board, W, b, token_to_move)
+            move, prob = predict_move(board, W1, b1, W2, b2, token_to_move)
         else:
             result = engine.play(board, chess.engine.Limit(time=time_limit))
             move = result.move
@@ -153,9 +159,10 @@ def run(model_path, n_games=10, stockfish_elo=800):
 
     # Charger modèle
     print(f"  Modèle    : {model_path}")
-    W, b, move_tokens = load_model(model_path)
+    W1, b1, W2, b2, move_tokens = load_model(model_path)
     token_to_move = build_token_to_move(move_tokens)
     print(f"  Tokens    : {len(token_to_move)} coups")
+    print(f"  Arch.     : {W1.shape[1]} → {W1.shape[0]} (ReLU) → {W2.shape[0]} (softmax)")
     print(f"  Parties   : {n_games}")
     print(f"  Backend   : {'GPU (CuPy)' if GPU else 'CPU (NumPy)'}")
 
@@ -181,7 +188,7 @@ def run(model_path, n_games=10, stockfish_elo=800):
         model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
         color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
 
-        score = play_game(W, b, token_to_move, engine, model_color)
+        score = play_game(W1, b1, W2, b2, token_to_move, engine, model_color)
         scores.append(score)
 
         if score == 1.0:

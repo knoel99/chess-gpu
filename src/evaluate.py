@@ -74,16 +74,22 @@ def build_token_to_move(move_tokens):
 def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
     """Retourne les k meilleurs coups légaux avec leurs probabilités."""
     x = board_to_vector(board)
-    x_gpu = xp.array(x.reshape(1, -1))
+    # Utiliser le même type que W1 (numpy ou cupy)
+    _xp = type(W1)
+    if hasattr(W1, '__array_namespace__') or 'cupy' in str(type(W1)):
+        import cupy as _xp
+    else:
+        _xp = np
+    x_arr = _xp.array(x.reshape(1, -1))
 
-    z1 = x_gpu @ W1.T + b1
-    a1 = xp.maximum(z1, 0)
+    z1 = x_arr @ W1.T + b1
+    a1 = _xp.maximum(z1, 0)
     logits = a1 @ W2.T + b2
     logits = logits - logits.max()
-    probs = xp.exp(logits)
+    probs = _xp.exp(logits)
     probs = probs / probs.sum()
 
-    if GPU:
+    if hasattr(probs, 'get'):
         probs = probs.get()
     probs = probs.flatten()
 
@@ -529,9 +535,32 @@ def find_stockfish():
     return None
 
 
-def run(model_path, n_games=10, stockfish_elo=800, think_time=0):
+def _play_game_worker(args):
+    """Worker pour jouer une partie en parallèle (CPU only)."""
+    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time = args
+
+    # Chaque worker utilise NumPy (pas CuPy — pas de GPU partagé entre processes)
+    import numpy as _xp
+
+    # Convertir les poids en arrays locaux
+    W1_l = _xp.array(W1)
+    b1_l = _xp.array(b1)
+    W2_l = _xp.array(W2)
+    b2_l = _xp.array(b2)
+
+    engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
+
+    score, pgn = play_game(W1_l, b1_l, W2_l, b2_l, token_to_move, engine,
+                           model_color, think_time=think_time)
+    engine.quit()
+    return score, pgn, model_color
+
+
+def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=1):
     """Lance l'évaluation contre Stockfish."""
     mode = "instantané" if think_time <= 0 else f"recherche {think_time}s/coup"
+    parallel = n_workers > 1
     print(f"\n{'='*60}")
     print(f"  ♟  Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})")
     print(f"{'='*60}")
@@ -544,7 +573,9 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0):
     print(f"  Arch.     : {W1.shape[1]} → {W1.shape[0]} (ReLU) → {W2.shape[0]} (softmax)")
     print(f"  Parties   : {n_games}")
     print(f"  Mode      : {mode}")
-    print(f"  Backend   : {'GPU (CuPy)' if GPU else 'CPU (NumPy)'}")
+    print(f"  Workers   : {n_workers}" + (" (parallèle)" if parallel else " (séquentiel)"))
+    print(f"  Backend   : {'GPU (CuPy)' if GPU else 'CPU (NumPy)'}" +
+          (" → workers CPU" if parallel and GPU else ""))
 
     # Trouver Stockfish
     sf_path = find_stockfish()
@@ -556,41 +587,85 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0):
     print(f"  Stockfish : {sf_path}")
     print(f"{'='*60}\n")
 
-    engine = chess.engine.SimpleEngine.popen_uci(sf_path)
-    # Limiter le niveau de Stockfish
-    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(stockfish_elo, 1350)})
+    # Ramener les poids sur CPU pour les workers
+    W1_cpu = W1.get() if GPU else W1
+    b1_cpu = b1.get() if GPU else b1
+    W2_cpu = W2.get() if GPU else W2
+    b2_cpu = b2.get() if GPU else b2
 
     results = {"win": 0, "draw": 0, "loss": 0}
     scores = []
     pgns = []
 
-    for i in range(n_games):
-        # Alterner les couleurs
-        model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
-        color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
+    if parallel:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
-                               model_color, think_time=think_time)
-        scores.append(score)
-        pgns.append(pgn)
+        tasks = []
+        for i in range(n_games):
+            model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
+            tasks.append((W1_cpu, b1_cpu, W2_cpu, b2_cpu, token_to_move,
+                         sf_path, stockfish_elo, model_color, think_time))
 
-        if score == 1.0:
-            results["win"] += 1
-            symbol = "✅"
-        elif score == 0.0:
-            results["loss"] += 1
-            symbol = "❌"
-        else:
-            results["draw"] += 1
-            symbol = "🤝"
+        game_results = [None] * n_games
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_play_game_worker, t): i
+                      for i, t in enumerate(tasks)}
+            done_count = 0
+            for future in as_completed(futures):
+                idx = futures[future]
+                score, pgn, model_color = future.result()
+                game_results[idx] = (score, pgn, model_color)
+                done_count += 1
 
-        total = i + 1
-        win_rate = sum(scores) / total * 100
-        print(f"  Partie {total:2d}/{n_games} │ {color_str:7s} │ {symbol} │ "
-              f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L │ "
-              f"Win rate: {win_rate:.0f}%")
+                if score == 1.0:
+                    results["win"] += 1
+                    symbol = "✅"
+                elif score == 0.0:
+                    results["loss"] += 1
+                    symbol = "❌"
+                else:
+                    results["draw"] += 1
+                    symbol = "🤝"
 
-    engine.quit()
+                color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
+                win_rate = (results["win"] + results["draw"] * 0.5) / done_count * 100
+                print(f"  Partie {done_count:2d}/{n_games} │ {color_str:7s} │ {symbol} │ "
+                      f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L │ "
+                      f"Win rate: {win_rate:.0f}%")
+
+        for score, pgn, _ in game_results:
+            scores.append(score)
+            pgns.append(pgn)
+    else:
+        engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+        engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(stockfish_elo, 1350)})
+
+        for i in range(n_games):
+            model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
+            color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
+
+            score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
+                                   model_color, think_time=think_time)
+            scores.append(score)
+            pgns.append(pgn)
+
+            if score == 1.0:
+                results["win"] += 1
+                symbol = "✅"
+            elif score == 0.0:
+                results["loss"] += 1
+                symbol = "❌"
+            else:
+                results["draw"] += 1
+                symbol = "🤝"
+
+            total = i + 1
+            win_rate = sum(scores) / total * 100
+            print(f"  Partie {total:2d}/{n_games} │ {color_str:7s} │ {symbol} │ "
+                  f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L │ "
+                  f"Win rate: {win_rate:.0f}%")
+
+        engine.quit()
 
     # Générer le HTML interactif
     html_path = os.path.splitext(model_path)[0] + "_games.html"
@@ -604,6 +679,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0):
     print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate:.0f}%)")
     print(f"  Elo Stockfish  : ~{stockfish_elo}")
     print(f"  Mode           : {mode}")
+    print(f"  Workers        : {n_workers}")
     print(f"  Visualisation  : {html_path}")
     print(f"{'='*60}")
 
@@ -614,8 +690,9 @@ def main():
     parser.add_argument("--games", type=int, default=10, help="Nombre de parties (défaut: 10)")
     parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
     parser.add_argument("--think-time", type=float, default=0, help="Temps de réflexion en secondes par coup (défaut: 0 = instantané)")
+    parser.add_argument("--workers", type=int, default=1, help="Nombre de parties en parallèle (défaut: 1)")
     args = parser.parse_args()
-    run(args.model, args.games, args.stockfish_elo, args.think_time)
+    run(args.model, args.games, args.stockfish_elo, args.think_time, args.workers)
 
 
 if __name__ == "__main__":

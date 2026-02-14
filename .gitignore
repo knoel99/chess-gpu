@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project data files
+data/*.json
+data/*.pgn
+data/*.npz
+data/*.png

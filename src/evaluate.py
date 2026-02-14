@@ -16,6 +16,7 @@ import argparse
 import numpy as np
 import chess
 import chess.engine
+import chess.pgn
 
 # Auto-détection GPU
 try:
@@ -106,33 +107,248 @@ def predict_move(board, W1, b1, W2, b2, token_to_move):
 # ── Partie ──────────────────────────────────────────────────────────────────
 
 def play_game(W1, b1, W2, b2, token_to_move, engine, model_color, time_limit=0.1):
-    """Joue une partie complète. Retourne le résultat du point de vue du modèle."""
+    """Joue une partie complète. Retourne (score, pgn_string)."""
     board = chess.Board()
+    game = chess.pgn.Game()
+    game.headers["White"] = "Modèle" if model_color == chess.WHITE else f"Stockfish"
+    game.headers["Black"] = "Stockfish" if model_color == chess.WHITE else "Modèle"
+    node = game
     move_count = 0
 
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
             move, prob = predict_move(board, W1, b1, W2, b2, token_to_move)
+            node = node.add_variation(move)
+            node.comment = f"p={prob:.3f}"
         else:
             result = engine.play(board, chess.engine.Limit(time=time_limit))
             move = result.move
+            node = node.add_variation(move)
 
         board.push(move)
         move_count += 1
 
     result = board.result()
+    game.headers["Result"] = result
 
     if result == "1-0":
-        return 1.0 if model_color == chess.WHITE else 0.0
+        score = 1.0 if model_color == chess.WHITE else 0.0
     elif result == "0-1":
-        return 0.0 if model_color == chess.WHITE else 1.0
+        score = 0.0 if model_color == chess.WHITE else 1.0
     elif result == "1/2-1/2":
-        return 0.5
+        score = 0.5
     else:
-        return 0.5  # partie non terminée
+        score = 0.5
+
+    return score, str(game)
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
+
+def generate_html(pgns, results, stockfish_elo, out_path):
+    """Génère un fichier HTML interactif avec échiquier navigable."""
+    import json
+    pgns_json = json.dumps(pgns)
+
+    html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>♟ Modèle vs Stockfish (Elo {stockfish_elo})</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee;
+         display: flex; flex-direction: column; align-items: center; padding: 20px; }}
+  h1 {{ margin-bottom: 10px; }}
+  .score {{ font-size: 1.2em; margin-bottom: 20px; color: #aaa; }}
+  .game-select {{ margin-bottom: 15px; }}
+  select, button {{ font-size: 16px; padding: 8px 16px; border-radius: 6px;
+                    border: none; cursor: pointer; margin: 0 4px; }}
+  select {{ background: #16213e; color: #eee; }}
+  button {{ background: #0f3460; color: #eee; }}
+  button:hover {{ background: #533483; }}
+  button:disabled {{ opacity: 0.3; cursor: default; }}
+  #board {{ font-size: 0; margin: 10px 0; }}
+  .row {{ display: flex; }}
+  .sq {{ width: 60px; height: 60px; display: flex; align-items: center;
+         justify-content: center; font-size: 40px; user-select: none; }}
+  .light {{ background: #e8d5b5; }}
+  .dark {{ background: #b58863; }}
+  .highlight {{ box-shadow: inset 0 0 0 3px #f5c542; }}
+  .info {{ margin-top: 15px; font-size: 14px; color: #aaa; text-align: center; }}
+  .move-list {{ max-width: 500px; margin-top: 10px; font-family: monospace;
+                font-size: 13px; color: #ccc; line-height: 1.6; word-wrap: break-word;
+                text-align: center; }}
+  .move-list .current {{ color: #f5c542; font-weight: bold; }}
+</style>
+</head>
+<body>
+<h1>♟ Modèle vs Stockfish</h1>
+<div class="score">{results['win']}W - {results['draw']}D - {results['loss']}L │ Elo Stockfish: ~{stockfish_elo}</div>
+
+<div class="game-select">
+  <select id="gameSelect" onchange="loadGame(this.value)"></select>
+</div>
+<div id="board"></div>
+<div>
+  <button onclick="goTo(0)">⏮</button>
+  <button onclick="step(-1)">◀</button>
+  <button id="playBtn" onclick="togglePlay()">▶ Play</button>
+  <button onclick="step(1)">▶</button>
+  <button onclick="goTo(positions.length-1)">⏭</button>
+</div>
+<div class="info" id="info"></div>
+<div class="move-list" id="moveList"></div>
+
+<script>
+const PIECES = {{
+  'P':'♙','N':'♘','B':'♗','R':'♖','Q':'♕','K':'♔',
+  'p':'♟','n':'♞','b':'♝','r':'♜','q':'♛','k':'♚'
+}};
+const pgns = {pgns_json};
+let positions = [], moves = [], currentPos = 0, playInterval = null;
+
+// Parse PGN simplifié
+function parsePGN(pgn) {{
+  const lines = pgn.split('\\n');
+  let moveText = '';
+  for (const line of lines) {{
+    if (!line.startsWith('[')) moveText += ' ' + line;
+  }}
+  moveText = moveText.replace(/\\{{[^}}]*\\}}/g, '').replace(/\\d+\\./g, '').trim();
+  return moveText.split(/\\s+/).filter(t => t && !['1-0','0-1','1/2-1/2','*'].includes(t));
+}}
+
+function fenToBoard(fen) {{
+  const rows = fen.split(' ')[0].split('/');
+  const board = [];
+  for (const row of rows) {{
+    const r = [];
+    for (const c of row) {{
+      if (c >= '1' && c <= '8') for (let i = 0; i < +c; i++) r.push('');
+      else r.push(c);
+    }}
+    board.push(r);
+  }}
+  return board;
+}}
+
+// Mini chess engine pour rejouer les coups
+function initBoard() {{
+  return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+}}
+
+function loadGame(idx) {{
+  // Parse via le PGN et générer les positions FEN avec un mini-moteur
+  // On utilise une approche simple : on lit le PGN move par move
+  const pgn = pgns[idx];
+  const moveTokens = parsePGN(pgn);
+
+  // Reset — on simule via fetch vers une micro lib embarquée
+  positions = ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'];
+  moves = moveTokens;
+
+  // Pour jouer les coups, on utilise chess.js embarqué minimal
+  if (typeof Chess !== 'undefined') {{
+    const game = new Chess();
+    for (const m of moveTokens) {{
+      const result = game.move(m);
+      if (!result) break;
+      positions.push(game.fen());
+    }}
+  }}
+
+  currentPos = 0;
+  render();
+  renderMoveList();
+
+  // Headers
+  const headers = {{}};
+  pgn.split('\\n').forEach(l => {{
+    const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
+    if (m) headers[m[1]] = m[2];
+  }});
+  document.getElementById('info').textContent =
+    `${{headers.White || '?'}} vs ${{headers.Black || '?'}} — ${{headers.Result || '?'}}`;
+}}
+
+function render() {{
+  const fen = positions[currentPos] || positions[0];
+  const board = fenToBoard(fen);
+  let html = '', lastFrom = -1, lastTo = -1;
+
+  for (let r = 0; r < 8; r++) {{
+    html += '<div class="row">';
+    for (let c = 0; c < 8; c++) {{
+      const light = (r + c) % 2 === 0;
+      const piece = board[r][c];
+      html += `<div class="sq ${{light?'light':'dark'}}">${{piece ? PIECES[piece] || '' : ''}}</div>`;
+    }}
+    html += '</div>';
+  }}
+  document.getElementById('board').innerHTML = html;
+  renderMoveList();
+}}
+
+function renderMoveList() {{
+  let html = '';
+  for (let i = 0; i < moves.length; i++) {{
+    if (i % 2 === 0) html += `${{Math.floor(i/2)+1}}. `;
+    const cls = i === currentPos - 1 ? 'current' : '';
+    html += `<span class="${{cls}}" style="cursor:pointer" onclick="goTo(${{i+1}})">${{moves[i]}}</span> `;
+  }}
+  document.getElementById('moveList').innerHTML = html;
+}}
+
+function step(dir) {{
+  const next = currentPos + dir;
+  if (next >= 0 && next < positions.length) {{ currentPos = next; render(); }}
+}}
+
+function goTo(idx) {{
+  if (idx >= 0 && idx < positions.length) {{ currentPos = idx; render(); }}
+}}
+
+function togglePlay() {{
+  if (playInterval) {{
+    clearInterval(playInterval);
+    playInterval = null;
+    document.getElementById('playBtn').textContent = '▶ Play';
+  }} else {{
+    document.getElementById('playBtn').textContent = '⏸ Pause';
+    playInterval = setInterval(() => {{
+      if (currentPos >= positions.length - 1) {{ togglePlay(); return; }}
+      step(1);
+    }}, 800);
+  }}
+}}
+
+// Populate game selector
+pgns.forEach((pgn, i) => {{
+  const opt = document.createElement('option');
+  const headers = {{}};
+  pgn.split('\\n').forEach(l => {{
+    const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
+    if (m) headers[m[1]] = m[2];
+  }});
+  opt.value = i;
+  opt.textContent = `Partie ${{i+1}}: ${{headers.White||'?'}} vs ${{headers.Black||'?'}} (${{headers.Result||'?'}})`;
+  document.getElementById('gameSelect').appendChild(opt);
+}});
+
+// Load chess.js from CDN for move replay
+const s = document.createElement('script');
+s.src = 'https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js';
+s.onload = () => loadGame(0);
+document.head.appendChild(s);
+</script>
+</body>
+</html>"""
+
+    with open(out_path, "w") as f:
+        f.write(html)
+    print(f"\n  🌐 Visualisation sauvegardée : {out_path}")
+
 
 def find_stockfish():
     """Cherche le binaire Stockfish."""
@@ -182,14 +398,16 @@ def run(model_path, n_games=10, stockfish_elo=800):
 
     results = {"win": 0, "draw": 0, "loss": 0}
     scores = []
+    pgns = []
 
     for i in range(n_games):
         # Alterner les couleurs
         model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
         color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
 
-        score = play_game(W1, b1, W2, b2, token_to_move, engine, model_color)
+        score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine, model_color)
         scores.append(score)
+        pgns.append(pgn)
 
         if score == 1.0:
             results["win"] += 1
@@ -209,6 +427,10 @@ def run(model_path, n_games=10, stockfish_elo=800):
 
     engine.quit()
 
+    # Générer le HTML interactif
+    html_path = os.path.splitext(model_path)[0] + "_games.html"
+    generate_html(pgns, results, stockfish_elo, html_path)
+
     # Résumé
     total_score = sum(scores)
     win_rate = total_score / n_games * 100
@@ -216,6 +438,7 @@ def run(model_path, n_games=10, stockfish_elo=800):
     print(f"  Résultat final : {results['win']}W - {results['draw']}D - {results['loss']}L")
     print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate:.0f}%)")
     print(f"  Elo Stockfish  : ~{stockfish_elo}")
+    print(f"  Visualisation  : {html_path}")
     print(f"{'='*60}")
 
 

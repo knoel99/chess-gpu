@@ -171,7 +171,7 @@ def run(model_path, n_games=10, stockfish_elo=800):
 
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     # Limiter le niveau de Stockfish
-    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": stockfish_elo})
+    engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(stockfish_elo, 1350)})
 
     results = {"win": 0, "draw": 0, "loss": 0}
     scores = []
@@ -216,7 +216,7 @@ def main():
     parser = argparse.ArgumentParser(description="Évaluation modèle vs Stockfish")
     parser.add_argument("model", help="Chemin vers le modèle .npz")
     parser.add_argument("--games", type=int, default=10, help="Nombre de parties (défaut: 10)")
-    parser.add_argument("--stockfish-elo", type=int, default=800, help="Elo de Stockfish (défaut: 800)")
+    parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
     args = parser.parse_args()
     run(args.model, args.games, args.stockfish_elo)
 

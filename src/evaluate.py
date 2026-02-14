@@ -71,16 +71,13 @@ def build_token_to_move(move_tokens):
     return moves
 
 
-def predict_move(board, W1, b1, W2, b2, token_to_move):
-    """Prédit le meilleur coup légal (réseau 2 couches)."""
+def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
+    """Retourne les k meilleurs coups légaux avec leurs probabilités."""
     x = board_to_vector(board)
     x_gpu = xp.array(x.reshape(1, -1))
 
-    # Couche 1 : ReLU
     z1 = x_gpu @ W1.T + b1
     a1 = xp.maximum(z1, 0)
-
-    # Couche 2 : softmax
     logits = a1 @ W2.T + b2
     logits = logits - logits.max()
     probs = xp.exp(logits)
@@ -90,38 +87,170 @@ def predict_move(board, W1, b1, W2, b2, token_to_move):
         probs = probs.get()
     probs = probs.flatten()
 
-    # Trier par probabilité décroissante, prendre le premier coup légal
     legal_moves = set(board.legal_moves)
     sorted_indices = np.argsort(probs)[::-1]
 
+    top = []
     for idx in sorted_indices:
         move = token_to_move.get(int(idx))
         if move and move in legal_moves:
-            return move, probs[idx]
+            top.append((move, float(probs[idx])))
+            if len(top) >= k:
+                break
+    return top
 
-    # Fallback : coup aléatoire (ne devrait jamais arriver)
-    import random
-    return random.choice(list(legal_moves)), 0.0
+
+# Valeur matérielle des pièces
+PIECE_VALUES = {
+    chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+    chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0,
+}
+
+
+def evaluate_material(board):
+    """Score matériel du point de vue des blancs."""
+    score = 0
+    for sq in chess.SQUARES:
+        piece = board.piece_at(sq)
+        if piece:
+            val = PIECE_VALUES[piece.piece_type]
+            score += val if piece.color == chess.WHITE else -val
+    return score
+
+
+def search(board, W1, b1, W2, b2, token_to_move, model_color,
+           depth, deadline, top_k=5):
+    """
+    Recherche arborescente avec le réseau de neurones.
+    Combine la probabilité du réseau et l'évaluation matérielle.
+    Retourne (score, meilleur_coup).
+    """
+    import time as _time
+
+    if _time.time() > deadline:
+        return evaluate_position(board, model_color), None
+
+    if board.is_game_over():
+        result = board.result()
+        if result == "1-0":
+            return (1000 if model_color == chess.WHITE else -1000), None
+        elif result == "0-1":
+            return (-1000 if model_color == chess.WHITE else 1000), None
+        else:
+            return 0, None
+
+    if depth == 0:
+        return evaluate_position(board, model_color), None
+
+    candidates = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=top_k)
+
+    if not candidates:
+        return evaluate_position(board, model_color), None
+
+    is_model_turn = (board.turn == model_color)
+    best_score = -99999 if is_model_turn else 99999
+    best_move = candidates[0][0]
+
+    for move, prob in candidates:
+        if _time.time() > deadline:
+            break
+
+        board.push(move)
+        child_score, _ = search(
+            board, W1, b1, W2, b2, token_to_move, model_color,
+            depth - 1, deadline, top_k=max(3, top_k - 1)
+        )
+        # Bonus pour les coups à haute probabilité du réseau
+        child_score += prob * 2 if is_model_turn else -prob * 2
+        board.pop()
+
+        if is_model_turn:
+            if child_score > best_score:
+                best_score = child_score
+                best_move = move
+        else:
+            if child_score < best_score:
+                best_score = child_score
+                best_move = move
+
+    return best_score, best_move
+
+
+def evaluate_position(board, model_color):
+    """Évaluation heuristique : matériel + mobilité."""
+    mat = evaluate_material(board)
+    if model_color == chess.BLACK:
+        mat = -mat
+    # Bonus mobilité
+    mobility = board.legal_moves.count() * 0.05
+    if board.turn != model_color:
+        mobility = -mobility
+    return mat + mobility
+
+
+def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
+    """Prédit le meilleur coup. Si think_time > 0, utilise la recherche arborescente."""
+    if think_time <= 0:
+        # Mode instantané (comme avant)
+        top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
+        if top:
+            return top[0][0], top[0][1]
+        import random
+        return random.choice(list(board.legal_moves)), 0.0
+
+    import time as _time
+    deadline = _time.time() + think_time
+
+    # Approfondissement itératif
+    best_move = None
+    best_score = -99999
+    model_color = board.turn
+    depth_reached = 0
+
+    for depth in range(1, 20):
+        if _time.time() > deadline:
+            break
+
+        score, move = search(
+            board, W1, b1, W2, b2, token_to_move, model_color,
+            depth, deadline, top_k=7
+        )
+
+        if move is not None:
+            best_move = move
+            best_score = score
+            depth_reached = depth
+
+    if best_move is None:
+        top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
+        best_move = top[0][0] if top else list(board.legal_moves)[0]
+
+    return best_move, depth_reached
 
 
 # ── Partie ──────────────────────────────────────────────────────────────────
 
-def play_game(W1, b1, W2, b2, token_to_move, engine, model_color, time_limit=0.1):
+def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
+              sf_time=0.1, think_time=0):
     """Joue une partie complète. Retourne (score, pgn_string)."""
     board = chess.Board()
     game = chess.pgn.Game()
-    game.headers["White"] = "Modèle" if model_color == chess.WHITE else f"Stockfish"
-    game.headers["Black"] = "Stockfish" if model_color == chess.WHITE else "Modèle"
+    game.headers["White"] = "Réseau de neurones" if model_color == chess.WHITE else "Stockfish"
+    game.headers["Black"] = "Stockfish" if model_color == chess.WHITE else "Réseau de neurones"
     node = game
     move_count = 0
 
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
-            move, prob = predict_move(board, W1, b1, W2, b2, token_to_move)
+            move, info = predict_move(board, W1, b1, W2, b2, token_to_move,
+                                      think_time=think_time)
             node = node.add_variation(move)
-            node.comment = f"p={prob:.3f}"
+            if think_time > 0:
+                node.comment = f"depth={info}"
+            else:
+                node.comment = f"p={info:.3f}"
         else:
-            result = engine.play(board, chess.engine.Limit(time=time_limit))
+            result = engine.play(board, chess.engine.Limit(time=sf_time))
             move = result.move
             node = node.add_variation(move)
 
@@ -154,7 +283,7 @@ def generate_html(pgns, results, stockfish_elo, out_path):
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<title>♟ Modèle vs Stockfish (Elo {stockfish_elo})</title>
+<title>♟ Réseau de neurones vs Stockfish (Elo {stockfish_elo})</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee;
@@ -204,7 +333,7 @@ def generate_html(pgns, results, stockfish_elo, out_path):
 </style>
 </head>
 <body>
-<h1>♟ Modèle vs Stockfish</h1>
+<h1>♟ Réseau de neurones vs Stockfish</h1>
 <div class="score">{results['win']}W - {results['draw']}D - {results['loss']}L │ Elo Stockfish: ~{stockfish_elo}</div>
 
 <div class="game-select">
@@ -288,12 +417,12 @@ function loadGame(idx) {{
   }});
   const wName = gameHeaders.White || 'Blancs';
   const bName = gameHeaders.Black || 'Noirs';
-  const isModelWhite = wName.includes('Mod');
+  const isModelWhite = wName.includes('seau');
   document.getElementById('whiteName').textContent = wName;
   document.getElementById('blackName').textContent = bName;
-  document.getElementById('whiteTag').textContent = isModelWhite ? '🤖 modèle' : '♟ stockfish';
+  document.getElementById('whiteTag').textContent = isModelWhite ? '🤖 réseau de neurones' : '♟ stockfish';
   document.getElementById('whiteTag').className = 'player-tag ' + (isModelWhite ? 'model' : 'stockfish');
-  document.getElementById('blackTag').textContent = isModelWhite ? '♟ stockfish' : '🤖 modèle';
+  document.getElementById('blackTag').textContent = isModelWhite ? '♟ stockfish' : '🤖 réseau de neurones';
   document.getElementById('blackTag').className = 'player-tag ' + (isModelWhite ? 'stockfish' : 'model');
   document.getElementById('info').textContent = `Résultat : ${{gameHeaders.Result || '?'}}`;
 }}
@@ -400,10 +529,11 @@ def find_stockfish():
     return None
 
 
-def run(model_path, n_games=10, stockfish_elo=800):
+def run(model_path, n_games=10, stockfish_elo=800, think_time=0):
     """Lance l'évaluation contre Stockfish."""
+    mode = "instantané" if think_time <= 0 else f"recherche {think_time}s/coup"
     print(f"\n{'='*60}")
-    print(f"  ♟  Évaluation : Modèle vs Stockfish (Elo ~{stockfish_elo})")
+    print(f"  ♟  Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})")
     print(f"{'='*60}")
 
     # Charger modèle
@@ -413,6 +543,7 @@ def run(model_path, n_games=10, stockfish_elo=800):
     print(f"  Tokens    : {len(token_to_move)} coups")
     print(f"  Arch.     : {W1.shape[1]} → {W1.shape[0]} (ReLU) → {W2.shape[0]} (softmax)")
     print(f"  Parties   : {n_games}")
+    print(f"  Mode      : {mode}")
     print(f"  Backend   : {'GPU (CuPy)' if GPU else 'CPU (NumPy)'}")
 
     # Trouver Stockfish
@@ -438,7 +569,8 @@ def run(model_path, n_games=10, stockfish_elo=800):
         model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
         color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
 
-        score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine, model_color)
+        score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
+                               model_color, think_time=think_time)
         scores.append(score)
         pgns.append(pgn)
 
@@ -471,17 +603,19 @@ def run(model_path, n_games=10, stockfish_elo=800):
     print(f"  Résultat final : {results['win']}W - {results['draw']}D - {results['loss']}L")
     print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate:.0f}%)")
     print(f"  Elo Stockfish  : ~{stockfish_elo}")
+    print(f"  Mode           : {mode}")
     print(f"  Visualisation  : {html_path}")
     print(f"{'='*60}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Évaluation modèle vs Stockfish")
+    parser = argparse.ArgumentParser(description="Évaluation réseau vs Stockfish")
     parser.add_argument("model", help="Chemin vers le modèle .npz")
     parser.add_argument("--games", type=int, default=10, help="Nombre de parties (défaut: 10)")
     parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
+    parser.add_argument("--think-time", type=float, default=0, help="Temps de réflexion en secondes par coup (défaut: 0 = instantané)")
     args = parser.parse_args()
-    run(args.model, args.games, args.stockfish_elo)
+    run(args.model, args.games, args.stockfish_elo, args.think_time)
 
 
 if __name__ == "__main__":

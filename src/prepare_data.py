@@ -16,7 +16,7 @@ import numpy as np
 import chess
 import chess.pgn
 import io
-
+import os
 
 # ---------------------------------------------------------------------------
 # 1. Construction du dictionnaire de coups (tokens)

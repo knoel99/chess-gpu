@@ -180,9 +180,22 @@ def generate_html(pgns, results, stockfish_elo, out_path):
   .highlight {{ box-shadow: inset 0 0 0 3px #f5c542; }}
   .players {{ display: flex; justify-content: space-between; width: 480px;
               margin-bottom: 5px; font-size: 14px; }}
-  .players .white {{ color: #fff; font-weight: bold; }}
-  .players .black {{ color: #888; font-weight: bold; }}
-  .players .active {{ color: #f5c542; }}
+  .player-bar {{ display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+                 border-radius: 6px; }}
+  .player-bar.top {{ background: #222; }}
+  .player-bar.bottom {{ background: #ddd; }}
+  .player-dot {{ width: 16px; height: 16px; border-radius: 50%; border: 2px solid #888; }}
+  .player-dot.white {{ background: #fff; }}
+  .player-dot.black {{ background: #000; }}
+  .player-name {{ font-weight: bold; }}
+  .player-bar.top .player-name {{ color: #ccc; }}
+  .player-bar.bottom .player-name {{ color: #333; }}
+  .player-tag {{ font-size: 11px; padding: 2px 6px; border-radius: 3px; font-weight: normal; }}
+  .player-tag.model {{ background: #533483; color: #fff; }}
+  .player-tag.stockfish {{ background: #0f3460; color: #fff; }}
+  .player-bar .turn-indicator {{ font-size: 11px; color: #f5c542; font-weight: bold;
+                                  margin-left: auto; }}
+  .board-container {{ border: 2px solid #555; border-radius: 4px; overflow: hidden; }}
   .info {{ margin-top: 15px; font-size: 14px; color: #aaa; text-align: center; }}
   .move-list {{ max-width: 500px; margin-top: 10px; font-family: monospace;
                 font-size: 13px; color: #ccc; line-height: 1.6; word-wrap: break-word;
@@ -197,11 +210,19 @@ def generate_html(pgns, results, stockfish_elo, out_path):
 <div class="game-select">
   <select id="gameSelect" onchange="loadGame(this.value)"></select>
 </div>
-<div class="players" id="players">
-  <span class="black" id="playerBlack">● Noirs</span>
-  <span class="white" id="playerWhite">○ Blancs</span>
+<div id="topPlayer" class="player-bar top" style="width:480px">
+  <div class="player-dot black"></div>
+  <span class="player-name" id="blackName">Noirs</span>
+  <span class="player-tag" id="blackTag"></span>
+  <span class="turn-indicator" id="blackTurn"></span>
 </div>
-<div id="board"></div>
+<div class="board-container"><div id="board"></div></div>
+<div id="bottomPlayer" class="player-bar bottom" style="width:480px">
+  <div class="player-dot white"></div>
+  <span class="player-name" id="whiteName">Blancs</span>
+  <span class="player-tag" id="whiteTag"></span>
+  <span class="turn-indicator" id="whiteTurn"></span>
+</div>
 <div>
   <button onclick="goTo(0)">⏮</button>
   <button onclick="step(-1)">◀</button>
@@ -265,8 +286,15 @@ function loadGame(idx) {{
     const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
     if (m) gameHeaders[m[1]] = m[2];
   }});
-  document.getElementById('playerWhite').textContent = `○ ${{gameHeaders.White || 'Blancs'}}`;
-  document.getElementById('playerBlack').textContent = `● ${{gameHeaders.Black || 'Noirs'}}`;
+  const wName = gameHeaders.White || 'Blancs';
+  const bName = gameHeaders.Black || 'Noirs';
+  const isModelWhite = wName.includes('Mod');
+  document.getElementById('whiteName').textContent = wName;
+  document.getElementById('blackName').textContent = bName;
+  document.getElementById('whiteTag').textContent = isModelWhite ? '🤖 modèle' : '♟ stockfish';
+  document.getElementById('whiteTag').className = 'player-tag ' + (isModelWhite ? 'model' : 'stockfish');
+  document.getElementById('blackTag').textContent = isModelWhite ? '♟ stockfish' : '🤖 modèle';
+  document.getElementById('blackTag').className = 'player-tag ' + (isModelWhite ? 'stockfish' : 'model');
   document.getElementById('info').textContent = `Résultat : ${{gameHeaders.Result || '?'}}`;
 }}
 
@@ -289,8 +317,8 @@ function render() {{
   document.getElementById('board').innerHTML = html;
 
   // Mettre à jour qui joue
-  document.getElementById('playerWhite').className = 'white' + (turn === 'white' ? ' active' : '');
-  document.getElementById('playerBlack').className = 'black' + (turn === 'black' ? ' active' : '');
+  document.getElementById('whiteTurn').textContent = turn === 'white' ? '◄ au trait' : '';
+  document.getElementById('blackTurn').textContent = turn === 'black' ? '◄ au trait' : '';
 
   renderMoveList();
 }}

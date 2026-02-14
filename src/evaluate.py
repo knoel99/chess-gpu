@@ -671,13 +671,24 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=1):
     html_path = os.path.splitext(model_path)[0] + "_games.html"
     generate_html(pgns, results, stockfish_elo, html_path)
 
-    # Résumé
+    # Estimation Elo (formule FIDE inversée)
+    import math
     total_score = sum(scores)
-    win_rate = total_score / n_games * 100
+    win_rate = total_score / n_games
+    if win_rate <= 0:
+        elo_diff = -400
+    elif win_rate >= 1:
+        elo_diff = 400
+    else:
+        elo_diff = -400 * math.log10(1.0 / win_rate - 1)
+    estimated_elo = round(stockfish_elo + elo_diff)
+
+    # Résumé
     print(f"\n{'='*60}")
     print(f"  Résultat final : {results['win']}W - {results['draw']}D - {results['loss']}L")
-    print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate:.0f}%)")
+    print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate*100:.0f}%)")
     print(f"  Elo Stockfish  : ~{stockfish_elo}")
+    print(f"  Elo estimé     : ~{estimated_elo}")
     print(f"  Mode           : {mode}")
     print(f"  Workers        : {n_workers}")
     print(f"  Visualisation  : {html_path}")

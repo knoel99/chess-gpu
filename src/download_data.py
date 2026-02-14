@@ -47,38 +47,33 @@ def download_pgn(url):
         return resp.read().decode()
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <username> [année] [mois]")
-        sys.exit(1)
-
-    username = sys.argv[1].lower()
-    year_filter = sys.argv[2] if len(sys.argv) > 2 else None
-    month_filter = sys.argv[3].zfill(2) if len(sys.argv) > 3 else None
+def run(username, year=None, month=None):
+    """Télécharge les parties et retourne le chemin du fichier PGN."""
+    username = username.lower()
+    month = month.zfill(2) if month else None
 
     print(f"♟  Téléchargement des parties de '{username}'...")
 
     archives = get_archives(username)
     print(f"  {len(archives)} mois d'archives disponibles")
 
-    # Filtrage par année/mois
-    if year_filter:
-        archives = [a for a in archives if f"/{year_filter}/" in a]
-        if month_filter:
-            archives = [a for a in archives if a.endswith(f"/{month_filter}")]
+    if year:
+        archives = [a for a in archives if f"/{year}/" in a]
+        if month:
+            archives = [a for a in archives if a.endswith(f"/{month}")]
 
     if not archives:
         print("Aucune archive ne correspond aux filtres.")
-        sys.exit(1)
+        return None
 
     print(f"  {len(archives)} mois à télécharger")
 
     os.makedirs("data", exist_ok=True)
     out_path = f"data/{username}"
-    if year_filter:
-        out_path += f"_{year_filter}"
-    if month_filter:
-        out_path += f"_{month_filter}"
+    if year:
+        out_path += f"_{year}"
+    if month:
+        out_path += f"_{month}"
     out_path += ".pgn"
 
     total_games = 0
@@ -95,10 +90,20 @@ def main():
             f.write("\n")
 
             print(f"{games_count} parties")
-            time.sleep(0.3)  # respect rate limit
+            time.sleep(0.3)
 
     print(f"\n✓ {total_games} parties sauvegardées dans {out_path}")
     print(f"  Taille : {os.path.getsize(out_path) / 1024 / 1024:.1f} Mo")
+    return out_path
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <username> [année] [mois]")
+        sys.exit(1)
+    run(sys.argv[1],
+        sys.argv[2] if len(sys.argv) > 2 else None,
+        sys.argv[3] if len(sys.argv) > 3 else None)
 
 
 if __name__ == "__main__":

@@ -400,14 +400,8 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
 # 8. Main
 # ---------------------------------------------------------------------------
 
-def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <training_data.npz> [model_output.npz]")
-        sys.exit(1)
-
-    data_path = sys.argv[1]
-    model_path = sys.argv[2] if len(sys.argv) > 2 else "data/model.npz"
-
+def run(data_path, model_path="data/model.npz"):
+    """Lance l'entraînement. Retourne le chemin du modèle."""
     print(f"Chargement de {data_path}...")
     data = np.load(data_path)
     X = data["X"]
@@ -430,6 +424,14 @@ def main():
     print(f"\nModèle sauvegardé dans {model_path}")
     print(f"  → W: {W.shape}, b: {b.shape}")
     print(f"  → Taille : {os.path.getsize(model_path) / (1024**2):.1f} Mo")
+    return model_path
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <training_data.npz> [model_output.npz]")
+        sys.exit(1)
+    run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "data/model.npz")
 
 
 if __name__ == "__main__":

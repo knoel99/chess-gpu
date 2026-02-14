@@ -174,14 +174,8 @@ def parse_pgn_file(pgn_path, move_to_idx):
 # 4. Main
 # ---------------------------------------------------------------------------
 
-def main():
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <input.pgn> <output.npz>")
-        sys.exit(1)
-
-    pgn_path = sys.argv[1]
-    out_path = sys.argv[2]
-
+def run(pgn_path, out_path):
+    """Convertit un PGN en données d'entraînement .npz. Retourne le chemin."""
     print(f"Construction du dictionnaire de coups...")
     move_to_idx, idx_to_move = build_move_dict()
     print(f"  → {len(move_to_idx)} tokens")
@@ -191,8 +185,6 @@ def main():
     print(f"  → {n_games} parties, {len(y)} exemples, {n_skipped} coups ignorés")
     print(f"  → X shape: {X.shape}, y shape: {y.shape}")
 
-    # Sauvegarder le dictionnaire de coups + données
-    # Convertir le dict en listes pour le stockage
     move_tokens = np.array(
         [(f, t, p if p else 0) for (f, t, p) in [idx_to_move[i] for i in range(len(idx_to_move))]],
         dtype=np.int32
@@ -201,9 +193,16 @@ def main():
     np.savez_compressed(out_path, X=X, y=y, move_tokens=move_tokens)
     print(f"  → Sauvegardé dans {out_path}")
 
-    # Stats
     file_size = os.path.getsize(out_path)
     print(f"  → Taille : {file_size / (1024**2):.1f} Mo")
+    return out_path
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <input.pgn> <output.npz>")
+        sys.exit(1)
+    run(sys.argv[1], sys.argv[2])
 
 
 if __name__ == "__main__":

@@ -221,17 +221,6 @@ const WHITE_PIECES = new Set(['P','N','B','R','Q','K']);
 const pgns = {pgns_json};
 let positions = [], moves = [], currentPos = 0, playInterval = null, gameHeaders = {{}};
 
-// Parse PGN simplifié
-function parsePGN(pgn) {{
-  const lines = pgn.split('\\n');
-  let moveText = '';
-  for (const line of lines) {{
-    if (!line.startsWith('[')) moveText += ' ' + line;
-  }}
-  moveText = moveText.replace(/\\{{[^}}]*\\}}/g, '').replace(/\\d+\\./g, '').trim();
-  return moveText.split(/\\s+/).filter(t => t && !['1-0','0-1','1/2-1/2','*'].includes(t));
-}}
-
 function fenToBoard(fen) {{
   const rows = fen.split(' ')[0].split('/');
   const board = [];
@@ -246,27 +235,22 @@ function fenToBoard(fen) {{
   return board;
 }}
 
-// Mini chess engine pour rejouer les coups
-function initBoard() {{
-  return 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-}}
-
 function loadGame(idx) {{
-  // Parse via le PGN et générer les positions FEN avec un mini-moteur
-  // On utilise une approche simple : on lit le PGN move par move
   const pgn = pgns[idx];
-  const moveTokens = parsePGN(pgn);
 
-  // Reset — on simule via fetch vers une micro lib embarquée
   positions = ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'];
-  moves = moveTokens;
+  moves = [];
 
-  // Pour jouer les coups, on utilise chess.js embarqué minimal
   if (typeof Chess !== 'undefined') {{
     const game = new Chess();
-    for (const m of moveTokens) {{
-      const result = game.move(m);
-      if (!result) break;
+    game.load_pgn(pgn);
+    const history = game.history();
+    moves = history;
+
+    // Rejouer pour capturer les FEN
+    game.reset();
+    for (const m of history) {{
+      game.move(m);
       positions.push(game.fen());
     }}
   }}

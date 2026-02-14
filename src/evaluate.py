@@ -557,9 +557,18 @@ def _play_game_worker(args):
     return score, pgn, model_color
 
 
-def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=1):
+def _auto_workers():
+    """Détecte le nombre optimal de workers (CPU cores, min 1, max 8)."""
+    import os
+    cores = os.cpu_count() or 1
+    return max(1, min(cores, 8))
+
+
+def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     """Lance l'évaluation contre Stockfish."""
     mode = "instantané" if think_time <= 0 else f"recherche {think_time}s/coup"
+    if n_workers <= 0:
+        n_workers = _auto_workers()
     parallel = n_workers > 1
     print(f"\n{'='*60}")
     print(f"  ♟  Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})")
@@ -701,7 +710,7 @@ def main():
     parser.add_argument("--games", type=int, default=10, help="Nombre de parties (défaut: 10)")
     parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
     parser.add_argument("--think-time", type=float, default=0, help="Temps de réflexion en secondes par coup (défaut: 0 = instantané)")
-    parser.add_argument("--workers", type=int, default=1, help="Nombre de parties en parallèle (défaut: 1)")
+    parser.add_argument("--workers", type=int, default=0, help="Nombre de workers (défaut: 0 = auto-détection CPU cores)")
     args = parser.parse_args()
     run(args.model, args.games, args.stockfish_elo, args.think_time, args.workers)
 

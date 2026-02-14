@@ -171,10 +171,18 @@ def generate_html(pgns, results, stockfish_elo, out_path):
   #board {{ font-size: 0; margin: 10px 0; }}
   .row {{ display: flex; }}
   .sq {{ width: 60px; height: 60px; display: flex; align-items: center;
-         justify-content: center; font-size: 40px; user-select: none; }}
-  .light {{ background: #e8d5b5; }}
+         justify-content: center; font-size: 44px; user-select: none;
+         text-shadow: none; }}
+  .light {{ background: #f0d9b5; }}
   .dark {{ background: #b58863; }}
+  .white-piece {{ color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 1px #000; }}
+  .black-piece {{ color: #000; text-shadow: 0 0 2px rgba(255,255,255,0.3); }}
   .highlight {{ box-shadow: inset 0 0 0 3px #f5c542; }}
+  .players {{ display: flex; justify-content: space-between; width: 480px;
+              margin-bottom: 5px; font-size: 14px; }}
+  .players .white {{ color: #fff; font-weight: bold; }}
+  .players .black {{ color: #888; font-weight: bold; }}
+  .players .active {{ color: #f5c542; }}
   .info {{ margin-top: 15px; font-size: 14px; color: #aaa; text-align: center; }}
   .move-list {{ max-width: 500px; margin-top: 10px; font-family: monospace;
                 font-size: 13px; color: #ccc; line-height: 1.6; word-wrap: break-word;
@@ -189,6 +197,10 @@ def generate_html(pgns, results, stockfish_elo, out_path):
 <div class="game-select">
   <select id="gameSelect" onchange="loadGame(this.value)"></select>
 </div>
+<div class="players" id="players">
+  <span class="black" id="playerBlack">● Noirs</span>
+  <span class="white" id="playerWhite">○ Blancs</span>
+</div>
 <div id="board"></div>
 <div>
   <button onclick="goTo(0)">⏮</button>
@@ -202,11 +214,12 @@ def generate_html(pgns, results, stockfish_elo, out_path):
 
 <script>
 const PIECES = {{
-  'P':'♙','N':'♘','B':'♗','R':'♖','Q':'♕','K':'♔',
+  'P':'♟','N':'♞','B':'♝','R':'♜','Q':'♛','K':'♚',
   'p':'♟','n':'♞','b':'♝','r':'♜','q':'♛','k':'♚'
 }};
+const WHITE_PIECES = new Set(['P','N','B','R','Q','K']);
 const pgns = {pgns_json};
-let positions = [], moves = [], currentPos = 0, playInterval = null;
+let positions = [], moves = [], currentPos = 0, playInterval = null, gameHeaders = {{}};
 
 // Parse PGN simplifié
 function parsePGN(pgn) {{
@@ -263,30 +276,38 @@ function loadGame(idx) {{
   renderMoveList();
 
   // Headers
-  const headers = {{}};
+  gameHeaders = {{}};
   pgn.split('\\n').forEach(l => {{
     const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
-    if (m) headers[m[1]] = m[2];
+    if (m) gameHeaders[m[1]] = m[2];
   }});
-  document.getElementById('info').textContent =
-    `${{headers.White || '?'}} vs ${{headers.Black || '?'}} — ${{headers.Result || '?'}}`;
+  document.getElementById('playerWhite').textContent = `○ ${{gameHeaders.White || 'Blancs'}}`;
+  document.getElementById('playerBlack').textContent = `● ${{gameHeaders.Black || 'Noirs'}}`;
+  document.getElementById('info').textContent = `Résultat : ${{gameHeaders.Result || '?'}}`;
 }}
 
 function render() {{
   const fen = positions[currentPos] || positions[0];
   const board = fenToBoard(fen);
-  let html = '', lastFrom = -1, lastTo = -1;
+  const turn = (fen.split(' ')[1] || 'w') === 'w' ? 'white' : 'black';
+  let html = '';
 
   for (let r = 0; r < 8; r++) {{
     html += '<div class="row">';
     for (let c = 0; c < 8; c++) {{
       const light = (r + c) % 2 === 0;
       const piece = board[r][c];
-      html += `<div class="sq ${{light?'light':'dark'}}">${{piece ? PIECES[piece] || '' : ''}}</div>`;
+      const colorCls = piece ? (WHITE_PIECES.has(piece) ? 'white-piece' : 'black-piece') : '';
+      html += `<div class="sq ${{light?'light':'dark'}} ${{colorCls}}">${{piece ? PIECES[piece] || '' : ''}}</div>`;
     }}
     html += '</div>';
   }}
   document.getElementById('board').innerHTML = html;
+
+  // Mettre à jour qui joue
+  document.getElementById('playerWhite').className = 'white' + (turn === 'white' ? ' active' : '');
+  document.getElementById('playerBlack').className = 'black' + (turn === 'black' ? ' active' : '');
+
   renderMoveList();
 }}
 

@@ -12,8 +12,6 @@ Usage:
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-
 from download_data import run as download
 from prepare_data import run as prepare
 from train import run as train

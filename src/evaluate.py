@@ -797,6 +797,95 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     log_file.close()
 
 
+def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_workers=0):
+    """Compare le mode instantané vs tree search sur les mêmes parties."""
+    import math
+
+    if n_workers <= 0:
+        n_workers = _auto_workers()
+
+    print(f"\n{'='*60}")
+    print(f"  ♟  Benchmark : Instantané vs Tree Search")
+    print(f"{'='*60}")
+    print(f"  Modèle     : {model_path}")
+    print(f"  Parties    : {n_games}")
+    print(f"  Stockfish  : Elo ~{stockfish_elo}")
+    print(f"  Think-time : {think_time}s/coup (pour mode recherche)")
+    print(f"  Workers    : {n_workers}")
+    print(f"{'='*60}\n")
+
+    W1, b1, W2, b2, move_tokens = load_model(model_path)
+    token_to_move = build_token_to_move(move_tokens)
+
+    sf_path = find_stockfish()
+    if sf_path is None:
+        print("❌ Stockfish non trouvé.")
+        sys.exit(1)
+
+    modes = [
+        ("instantané", 0),
+        (f"recherche {think_time}s", think_time),
+    ]
+
+    for mode_name, tt in modes:
+        print(f"\n  ── Mode : {mode_name} {'─'*40}")
+        results = {"win": 0, "draw": 0, "loss": 0}
+        total_moves = 0
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        tasks = []
+        for i in range(n_games):
+            model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
+            tasks.append((W1, b1, W2, b2, token_to_move,
+                         sf_path, stockfish_elo, model_color, tt, i, None))
+
+        game_lengths = []
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_play_game_thread, t): i
+                      for i, t in enumerate(tasks)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                score, pgn, model_color = future.result()
+
+                # Compter les coups depuis le PGN
+                n_moves = pgn.count(".")
+                game_lengths.append(n_moves)
+
+                if score == 1.0:
+                    results["win"] += 1
+                    symbol = "✅"
+                elif score == 0.0:
+                    results["loss"] += 1
+                    symbol = "❌"
+                else:
+                    results["draw"] += 1
+                    symbol = "🤝"
+
+                color = "⬜" if model_color == chess.WHITE else "⬛"
+                print(f"    {color} G{idx+1:02d} │ {symbol} │ ~{n_moves} demi-coups")
+
+        total_score = results["win"] + results["draw"] * 0.5
+        win_rate = total_score / n_games
+        if win_rate <= 0:
+            elo_diff = -400
+        elif win_rate >= 1:
+            elo_diff = 400
+        else:
+            elo_diff = -400 * math.log10(1.0 / win_rate - 1)
+        estimated_elo = round(stockfish_elo + elo_diff)
+        avg_len = sum(game_lengths) / len(game_lengths) if game_lengths else 0
+
+        print(f"\n    Résultat   : {results['win']}W-{results['draw']}D-{results['loss']}L")
+        print(f"    Win rate   : {win_rate*100:.0f}%")
+        print(f"    Elo estimé : ~{estimated_elo}")
+        print(f"    Durée moy. : ~{avg_len:.0f} demi-coups/partie")
+
+    print(f"\n{'='*60}")
+    print(f"  Conclusion : comparez Elo et durée moyenne entre les deux modes")
+    print(f"{'='*60}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Évaluation réseau vs Stockfish")
     parser.add_argument("model", help="Chemin vers le modèle .npz")
@@ -804,8 +893,13 @@ def main():
     parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
     parser.add_argument("--think-time", type=float, default=0, help="Temps de réflexion en secondes par coup (défaut: 0 = instantané)")
     parser.add_argument("--workers", type=int, default=0, help="Nombre de workers (défaut: 0 = auto-détection CPU cores)")
+    parser.add_argument("--benchmark", action="store_true", help="Compare instantané vs tree search")
     args = parser.parse_args()
-    run(args.model, args.games, args.stockfish_elo, args.think_time, args.workers)
+    if args.benchmark:
+        benchmark(args.model, args.games, args.stockfish_elo,
+                  args.think_time or 1.0, args.workers)
+    else:
+        run(args.model, args.games, args.stockfish_elo, args.think_time, args.workers)
 
 
 if __name__ == "__main__":

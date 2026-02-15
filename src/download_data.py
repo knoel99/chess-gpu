@@ -34,9 +34,8 @@ def get_archives(username):
     """Récupère la liste des archives mensuelles d'un joueur."""
     data = api_get(f"{BASE_URL}/{username}/games/archives")
     if data is None:
-        print(f"Joueur '{username}' introuvable.")
-        sys.exit(1)
-    return data["archives"]
+        return None
+    return data.get("archives", [])
 
 
 def download_pgn(url):
@@ -55,6 +54,9 @@ def run(username, year=None, month=None):
     print(f"♟  Téléchargement des parties de '{username}'...")
 
     archives = get_archives(username)
+    if archives is None:
+        print(f"  ⚠ Joueur '{username}' introuvable sur Chess.com")
+        return None
     print(f"  {len(archives)} mois d'archives disponibles")
 
     if year:
@@ -133,18 +135,18 @@ def run(username, year=None, month=None):
     return out_path
 
 
-# Top 10 joueurs d'échecs (comptes Chess.com)
+# Top 10 joueurs d'échecs (comptes Chess.com vérifiés)
 TOP_PLAYERS = [
-    "magnuscarlsen",
-    "hikaru",
-    "faaborovsky",       # Fabiano Caruana
-    "lachesisq",         # Ian Nepomniachtchi
-    "firouzja2003",      # Alireza Firouzja
-    "duhless",           # Sergey Karjakin (ancien compte)
-    "gmwso",             # Wesley So
-    "leinier",           # Leinier Dominguez
-    "rpragchess",        # Praggnanandhaa
-    "daniil_dubov",      # Daniil Dubov
+    "magnuscarlsen",       # Magnus Carlsen
+    "hikaru",              # Hikaru Nakamura
+    "fabianocaruana",      # Fabiano Caruana
+    "lachesisq",           # Ian Nepomniachtchi
+    "firouzja2003",        # Alireza Firouzja
+    "nihalsarin",          # Nihal Sarin
+    "rpragchess",          # Praggnanandhaa
+    "lyonbeast",           # Maxime Vachier-Lagrave
+    "grischuk",            # Alexander Grischuk
+    "anishgiri",           # Anish Giri
 ]
 
 

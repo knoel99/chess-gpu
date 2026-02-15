@@ -165,16 +165,26 @@ def _parse_game(game_text, move_to_idx):
 
 def _split_pgn(pgn_path):
     """Découpe un fichier PGN en textes de parties individuelles."""
+    import sys
+    file_size = os.path.getsize(pgn_path)
     games = []
     current = []
+    bytes_read = 0
+    last_pct = -1
     with open(pgn_path, "r") as f:
         for line in f:
+            bytes_read += len(line)
             if line.startswith("[Event ") and current:
                 games.append("".join(current))
                 current = []
             current.append(line)
+            pct = bytes_read * 100 // file_size
+            if pct >= last_pct + 5:
+                last_pct = pct
+                print(f"\r  Lecture du PGN... {pct}% ({len(games)} parties)", end="", flush=True)
     if current:
         games.append("".join(current))
+    print(f"\r  Lecture du PGN... 100% ({len(games)} parties)", flush=True)
     return games
 
 
@@ -227,11 +237,9 @@ def parse_pgn_file(pgn_path, move_to_idx):
             done += 1
             elapsed = _time.time() - t0
             pct = done / len(batches) * 100
-            print(f"\r  [{done}/{len(batches)}] {pct:.0f}% │ "
+            print(f"  [{done}/{len(batches)}] {pct:.0f}% │ "
                   f"{n_games} parties │ {len(y_list):,} exemples │ "
-                  f"{elapsed:.0f}s", end="", flush=True)
-
-    print()
+                  f"{elapsed:.0f}s", flush=True)
     X = np.array(X_list, dtype=np.uint8)
     y = np.array(y_list, dtype=np.int32)
 

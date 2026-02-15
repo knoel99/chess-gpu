@@ -75,6 +75,7 @@ import threading
 
 # Lock pour sérialiser les appels GPU (CuPy n'est pas thread-safe)
 _gpu_lock = threading.Lock()
+_log_lock = threading.Lock()
 
 
 def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
@@ -130,7 +131,7 @@ def evaluate_material(board):
 
 
 def search(board, W1, b1, W2, b2, token_to_move, model_color,
-           depth, deadline, top_k=5):
+           depth, deadline, top_k=5, stats=None):
     """
     Recherche arborescente avec le réseau de neurones.
     Combine la probabilité du réseau et l'évaluation matérielle.
@@ -154,6 +155,9 @@ def search(board, W1, b1, W2, b2, token_to_move, model_color,
         return evaluate_position(board, model_color), None
 
     candidates = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=top_k)
+    if stats is not None:
+        stats["nodes"] += 1
+        stats["forward_passes"] += 1
 
     if not candidates:
         return evaluate_position(board, model_color), None
@@ -169,7 +173,7 @@ def search(board, W1, b1, W2, b2, token_to_move, model_color,
         board.push(move)
         child_score, _ = search(
             board, W1, b1, W2, b2, token_to_move, model_color,
-            depth - 1, deadline, top_k=max(3, top_k - 1)
+            depth - 1, deadline, top_k=max(3, top_k - 1), stats=stats
         )
         # Bonus pour les coups à haute probabilité du réseau
         child_score += prob * 2 if is_model_turn else -prob * 2
@@ -200,32 +204,40 @@ def evaluate_position(board, model_color):
 
 
 def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
-    """Prédit le meilleur coup. Si think_time > 0, utilise la recherche arborescente."""
+    """Prédit le meilleur coup. Retourne (move, info_dict)."""
+    legal_count = board.legal_moves.count()
+
     if think_time <= 0:
-        # Mode instantané (comme avant)
         top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
         if top:
-            return top[0][0], top[0][1]
+            info = {"depth": 0, "nodes": 1, "forward_passes": 1,
+                    "legal_moves": legal_count, "prob": top[0][1]}
+            return top[0][0], info
         import random
-        return random.choice(list(board.legal_moves)), 0.0
+        info = {"depth": 0, "nodes": 0, "forward_passes": 0,
+                "legal_moves": legal_count, "prob": 0.0}
+        return random.choice(list(board.legal_moves)), info
 
     import time as _time
     deadline = _time.time() + think_time
 
-    # Approfondissement itératif
     best_move = None
     best_score = -99999
     model_color = board.turn
     depth_reached = 0
+    total_stats = {"nodes": 0, "forward_passes": 0}
 
     for depth in range(1, 20):
         if _time.time() > deadline:
             break
 
+        depth_stats = {"nodes": 0, "forward_passes": 0}
         score, move = search(
             board, W1, b1, W2, b2, token_to_move, model_color,
-            depth, deadline, top_k=7
+            depth, deadline, top_k=7, stats=depth_stats
         )
+        total_stats["nodes"] += depth_stats["nodes"]
+        total_stats["forward_passes"] += depth_stats["forward_passes"]
 
         if move is not None:
             best_move = move
@@ -235,14 +247,21 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
     if best_move is None:
         top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
         best_move = top[0][0] if top else list(board.legal_moves)[0]
+        total_stats["forward_passes"] += 1
 
-    return best_move, depth_reached
+    elapsed = think_time - max(0, deadline - _time.time()) if think_time > 0 else 0
+    info = {"depth": depth_reached, "nodes": total_stats["nodes"],
+            "forward_passes": total_stats["forward_passes"],
+            "legal_moves": legal_count, "score": best_score,
+            "time": round(elapsed, 3)}
+    return best_move, info
 
 
 # ── Partie ──────────────────────────────────────────────────────────────────
 
 def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
-              sf_time=0.1, think_time=0, move_callback=None, game_id=0):
+              sf_time=0.1, think_time=0, move_callback=None, game_id=0,
+              log_file=None):
     """Joue une partie complète. Retourne (score, pgn_string)."""
     board = chess.Board()
     game = chess.pgn.Game()
@@ -256,11 +275,27 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
             move, info = predict_move(board, W1, b1, W2, b2, token_to_move,
                                       think_time=think_time)
             node = node.add_variation(move)
-            if think_time > 0:
-                node.comment = f"depth={info}"
-            else:
-                node.comment = f"p={info:.3f}"
+            comment = (f"d={info['depth']} n={info['nodes']} "
+                       f"fw={info['forward_passes']} legal={info['legal_moves']}")
+            if 'prob' in info:
+                comment = f"p={info['prob']:.3f} legal={info['legal_moves']}"
+            node.comment = comment
             who = "🤖"
+
+            if log_file is not None:
+                half = move_count + 1
+                move_num = (half + 1) // 2
+                dot = "." if board.turn == chess.WHITE else "..."
+                with _log_lock:
+                    log_file.write(
+                        f"G{game_id+1:02d} │ {move_num}{dot}{move.uci():6s} │ "
+                        f"depth={info['depth']:2d} │ nodes={info['nodes']:5d} │ "
+                        f"fw_pass={info['forward_passes']:5d} │ "
+                        f"legal={info['legal_moves']:3d} │ "
+                        f"score={info.get('score', 0):+.1f} │ "
+                        f"time={info.get('time', 0):.2f}s\n"
+                    )
+                    log_file.flush()
         else:
             result = engine.play(board, chess.engine.Limit(time=sf_time))
             move = result.move
@@ -547,14 +582,15 @@ def find_stockfish():
 
 def _play_game_thread(args):
     """Worker thread pour jouer une partie (partage GPU via threads)."""
-    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id = args
+    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, log_file = args
 
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
     score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
                            model_color, think_time=think_time,
-                           move_callback=None, game_id=game_id)
+                           move_callback=None, game_id=game_id,
+                           log_file=log_file)
     engine.quit()
     return score, pgn, model_color
 
@@ -597,6 +633,16 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
         print("   brew install stockfish   # macOS")
         sys.exit(1)
     print(f"  Stockfish : {sf_path}")
+    # Fichier de log
+    log_path = os.path.splitext(model_path)[0] + "_search.log"
+    log_file = open(log_path, "w")
+    log_file.write(f"# Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})\n")
+    log_file.write(f"# Modèle : {model_path}\n")
+    log_file.write(f"# Mode : {mode} | Workers : {n_workers}\n")
+    log_file.write(f"# Format : Game │ Coup │ depth │ nodes │ fw_pass │ legal │ score │ time\n")
+    log_file.write(f"{'─'*90}\n")
+    log_file.flush()
+    print(f"  Log       : {log_path}")
     print(f"{'='*60}\n")
 
     results = {"win": 0, "draw": 0, "loss": 0}
@@ -611,7 +657,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
             tasks.append((W1, b1, W2, b2, token_to_move,
-                         sf_path, stockfish_elo, model_color, think_time, i))
+                         sf_path, stockfish_elo, model_color, think_time, i, log_file))
 
         game_results = [None] * n_games
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
@@ -674,7 +720,8 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
             print(f"  G{i+1:02d} │ {color_str} │ début", end="")
             score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
                                    model_color, think_time=think_time,
-                                   move_callback=_seq_cb, game_id=i)
+                                   move_callback=_seq_cb, game_id=i,
+                                   log_file=log_file)
             scores.append(score)
             pgns.append(pgn)
 
@@ -719,7 +766,15 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     print(f"  Mode           : {mode}")
     print(f"  Workers        : {n_workers}")
     print(f"  Visualisation  : {html_path}")
+    print(f"  Log recherche  : {log_path}")
     print(f"{'='*60}")
+
+    # Résumé dans le log
+    log_file.write(f"{'─'*90}\n")
+    log_file.write(f"# Résultat : {results['win']}W - {results['draw']}D - {results['loss']}L\n")
+    log_file.write(f"# Score    : {total_score:.1f}/{n_games} ({win_rate*100:.0f}%)\n")
+    log_file.write(f"# Elo estimé : ~{estimated_elo}\n")
+    log_file.close()
 
 
 def main():

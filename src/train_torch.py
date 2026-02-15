@@ -475,7 +475,7 @@ def export_to_npz(model, move_tokens, out_path):
     W2, b2 = dernière couche linéaire (output)
     W_hidden_i, b_hidden_i = couches intermédiaires
     """
-    state = model.state_dict()
+    state = {k: v.cpu() for k, v in model.state_dict().items()}
 
     # Extraire les couches linéaires (ignorer BN, Dropout)
     linear_layers = []

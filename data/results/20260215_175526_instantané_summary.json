@@ -1,0 +1,16 @@
+{
+  "model": "data/top_players_model.npz",
+  "mode": "instantané",
+  "max_depth": 0,
+  "max_nodes": 0,
+  "stockfish_elo": 1350,
+  "estimated_elo": 950,
+  "n_games": 10,
+  "wins": 0,
+  "draws": 0,
+  "losses": 10,
+  "score": 0.0,
+  "win_rate": 0.0,
+  "workers": 8,
+  "tag": "20260215_175526_instantané"
+}

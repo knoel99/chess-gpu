@@ -1,0 +1,16 @@
+{
+  "model": "data/top_players_model.npz",
+  "mode": "recherche d=4 n=1000",
+  "max_depth": 4,
+  "max_nodes": 1000,
+  "stockfish_elo": 1350,
+  "estimated_elo": 838,
+  "n_games": 10,
+  "wins": 0,
+  "draws": 1,
+  "losses": 9,
+  "score": 0.5,
+  "win_rate": 0.05,
+  "workers": 8,
+  "tag": "20260215_175537_recherche_d4_n1000"
+}

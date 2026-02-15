@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>♟ Réseau de neurones vs Stockfish (Elo 1350)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee;
+         display: flex; flex-direction: column; align-items: center; padding: 20px; }
+  h1 { margin-bottom: 10px; }
+  .score { font-size: 1.2em; margin-bottom: 20px; color: #aaa; }
+  .game-select { margin-bottom: 15px; }
+  select, button { font-size: 16px; padding: 8px 16px; border-radius: 6px;
+                    border: none; cursor: pointer; margin: 0 4px; }
+  select { background: #16213e; color: #eee; }
+  button { background: #0f3460; color: #eee; }
+  button:hover { background: #533483; }
+  button:disabled { opacity: 0.3; cursor: default; }
+  #board { font-size: 0; margin: 10px 0; }
+  .row { display: flex; }
+  .sq { width: 60px; height: 60px; display: flex; align-items: center;
+         justify-content: center; font-size: 44px; user-select: none;
+         text-shadow: none; }
+  .light { background: #f0d9b5; }
+  .dark { background: #b58863; }
+  .white-piece { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 1px #000; }
+  .black-piece { color: #000; text-shadow: 0 0 2px rgba(255,255,255,0.3); }
+  .highlight { box-shadow: inset 0 0 0 3px #f5c542; }
+  .players { display: flex; justify-content: space-between; width: 480px;
+              margin-bottom: 5px; font-size: 14px; }
+  .player-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+                 border-radius: 6px; }
+  .player-bar.top { background: #222; }
+  .player-bar.bottom { background: #ddd; }
+  .player-dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #888; }
+  .player-dot.white { background: #fff; }
+  .player-dot.black { background: #000; }
+  .player-name { font-weight: bold; }
+  .player-bar.top .player-name { color: #ccc; }
+  .player-bar.bottom .player-name { color: #333; }
+  .player-tag { font-size: 11px; padding: 2px 6px; border-radius: 3px; font-weight: normal; }
+  .player-tag.model { background: #533483; color: #fff; }
+  .player-tag.stockfish { background: #0f3460; color: #fff; }
+  .player-bar .turn-indicator { font-size: 11px; color: #f5c542; font-weight: bold;
+                                  margin-left: auto; }
+  .board-container { border: 2px solid #555; border-radius: 4px; overflow: hidden; }
+  .info { margin-top: 15px; font-size: 14px; color: #aaa; text-align: center; }
+  .move-list { max-width: 500px; margin-top: 10px; font-family: monospace;
+                font-size: 13px; color: #ccc; line-height: 1.6; word-wrap: break-word;
+                text-align: center; }
+  .move-list .current { color: #f5c542; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>♟ Réseau de neurones vs Stockfish</h1>
+<div class="score">0W - 1D - 9L │ Elo Stockfish: ~1350</div>
+
+<div class="game-select">
+  <select id="gameSelect" onchange="loadGame(this.value)"></select>
+</div>
+<div id="topPlayer" class="player-bar top" style="width:480px">
+  <div class="player-dot black"></div>
+  <span class="player-name" id="blackName">Noirs</span>
+  <span class="player-tag" id="blackTag"></span>
+  <span class="turn-indicator" id="blackTurn"></span>
+</div>
+<div class="board-container"><div id="board"></div></div>
+<div id="bottomPlayer" class="player-bar bottom" style="width:480px">
+  <div class="player-dot white"></div>
+  <span class="player-name" id="whiteName">Blancs</span>
+  <span class="player-tag" id="whiteTag"></span>
+  <span class="turn-indicator" id="whiteTurn"></span>
+</div>
+<div>
+  <button onclick="goTo(0)">⏮</button>
+  <button onclick="step(-1)">◀</button>
+  <button id="playBtn" onclick="togglePlay()">▶ Play</button>
+  <button onclick="step(1)">▶</button>
+  <button onclick="goTo(positions.length-1)">⏭</button>
+</div>
+<div class="info" id="info"></div>
+<div class="move-list" id="moveList"></div>
+
+<script>
+const PIECES = {
+  'P':'♟','N':'♞','B':'♝','R':'♜','Q':'♛','K':'♚',
+  'p':'♟','n':'♞','b':'♝','r':'♜','q':'♛','k':'♚'
+};
+const WHITE_PIECES = new Set(['P','N','B','R','Q','K']);
+const pgns = ["[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"R\u00e9seau de neurones\"]\n[Black \"Stockfish\"]\n[Result \"*\"]\n\n1. e4 { d=4 n=52 fw=52 legal=20 } 1... e6 2. d4 { d=4 n=30 fw=30 legal=30 } 2... d5 3. Nc3 { d=4 n=43 fw=43 legal=38 } 3... dxe4 4. Nxe4 { d=4 n=21 fw=21 legal=39 } 4... a6 5. Nf3 { d=4 n=32 fw=32 legal=42 } 5... Be7 6. Bd3 { d=4 n=26 fw=26 legal=40 } 6... Nf6 7. O-O { d=4 n=72 fw=72 legal=42 } 7... Nxe4 8. Bxe4 { d=4 n=20 fw=20 legal=32 } 8... f5 9. Bd3 { d=4 n=81 fw=81 legal=33 } 9... Bf6 10. Re1 { d=4 n=73 fw=73 legal=33 } 10... Nc6 11. c3 { d=4 n=27 fw=27 legal=38 } 11... Qd5 12. Bf4 { d=4 n=107 fw=107 legal=41 } 12... Kd8 13. Qe2 { d=4 n=140 fw=140 legal=48 } 13... Ne7 14. c4 { d=4 n=115 fw=115 legal=46 } 14... Qd6 15. Bxd6 { d=4 n=76 fw=76 legal=43 } 15... Nd5 16. cxd5 { d=4 n=129 fw=129 legal=44 } 16... cxd6 17. dxe6 { d=4 n=56 fw=56 legal=37 } 17... f4 18. e7+ { d=4 n=104 fw=104 legal=39 } 18... Ke8 19. Bc4 { d=4 n=127 fw=127 legal=39 } 19... Bf5 20. Bd5 { d=4 n=141 fw=141 legal=39 } 20... Ra7 21. Bc4 { d=4 n=116 fw=116 legal=41 } 21... Bg6 22. Nd2 { d=4 n=150 fw=150 legal=39 } 22... Bxd4 23. Qf3 { d=4 n=132 fw=132 legal=40 } 23... Be5 24. Nb3 { d=4 n=104 fw=104 legal=51 } 24... Kd7 25. Nc5+ { d=4 n=118 fw=118 legal=51 } 25... Kxe7 26. Ne6 { d=4 n=121 fw=121 legal=55 } 26... Re8 27. Nxf4 { d=4 n=94 fw=94 legal=52 } 27... Bc2 28. Ne6 { d=4 n=124 fw=124 legal=53 } 28... Bxb2 29. Nc7+ { d=4 n=105 fw=105 legal=54 } 29... Kd7 30. Rxe8 { d=4 n=80 fw=80 legal=58 } 30... Kxc7 31. Rae1 { d=4 n=125 fw=125 legal=57 } 31... b5 32. Bd5 { d=4 n=120 fw=120 legal=62 } 32... Bg6 33. Rf8 { d=4 n=146 fw=146 legal=58 } 33... Bd4 34. h4 { d=4 n=177 fw=177 legal=56 } 34... Bc2 35. Re7+ { d=4 n=132 fw=132 legal=56 } 35... Kb6 36. Rff7 { d=4 n=149 fw=149 legal=57 } 36... Rxe7 37. Rxe7 { d=4 n=93 fw=93 legal=36 } 37... a5 38. Rb7+ { d=4 n=132 fw=132 legal=47 } 38... Ka6 39. Re7 { d=4 n=116 fw=116 legal=41 } 39... Be5 40. Re8 { d=4 n=133 fw=133 legal=42 } 40... Kb6 41. Qe3+ { d=4 n=144 fw=144 legal=43 } 41... Kc7 42. Re7+ { d=4 n=98 fw=98 legal=49 } 42... Kd8 43. Ra7 { d=4 n=134 fw=134 legal=48 } 43... h6 44. Ra8+ { d=4 n=101 fw=101 legal=47 } 44... Ke7 45. Rxa5 { d=4 n=128 fw=128 legal=48 } 45... b4 46. Be4 { d=4 n=130 fw=130 legal=46 } 46... Bxe4 47. Qxe4 { d=4 n=149 fw=149 legal=37 } 47... Kf8 48. Rb5 { d=4 n=107 fw=107 legal=38 } 48... Kf7 49. h5 { d=4 n=131 fw=131 legal=37 } 49... Ke6 50. Rxb4 { d=4 n=109 fw=109 legal=37 } 50... Kf6 51. Rb5 { d=4 n=122 fw=122 legal=38 } 51... Ke7 52. Ra5 { d=4 n=134 fw=134 legal=41 } 52... Kd7 53. Ra6 { d=4 n=117 fw=117 legal=39 } 53... Kc8 54. Rb6 { d=4 n=97 fw=97 legal=38 } 54... Kd7 55. Rb8 { d=4 n=117 fw=117 legal=40 } 55... Ke7 56. Rc8 { d=4 n=109 fw=109 legal=44 } 56... g6 57. hxg6 { d=4 n=91 fw=91 legal=44 } 57... Kf6 58. Rc7 { d=4 n=132 fw=132 legal=43 } 58... d5 59. Qd3 { d=4 n=181 fw=181 legal=40 } 59... Bxc7 60. Qf3+ { d=4 n=140 fw=140 legal=29 } 60... Kxg6 61. Qxd5 { d=4 n=118 fw=118 legal=24 } 61... Bf4 62. g3 { d=4 n=107 fw=107 legal=31 } 62... Bg5 63. Qe4+ { d=4 n=129 fw=129 legal=34 } 63... Kf7 64. Kf1 { d=4 n=123 fw=123 legal=36 } 64... Kf6 65. Kg2 { d=4 n=96 fw=96 legal=36 } 65... Kg7 66. Qe6 { d=4 n=139 fw=139 legal=36 } 66... Kh8 67. Qf7 { d=4 n=121 fw=121 legal=35 } 67... Bd2 68. Qg6 { d=4 n=89 fw=89 legal=31 } 68... Bf4 69. Qxh6+ { d=4 n=44 fw=44 legal=31 } 69... Bxh6 70. f4 { d=4 n=99 fw=99 legal=11 } 70... Kg8 71. Kf3 { d=4 n=65 fw=65 legal=11 } 71... Kh8 72. Ke3 { d=4 n=98 fw=98 legal=10 } 72... Kg7 73. Ke2 { d=4 n=92 fw=92 legal=10 } 73... Kf8 74. Kf3 { d=4 n=94 fw=94 legal=12 } 74... Kf7 75. Kg2 { d=4 n=105 fw=105 legal=10 } 75... Bf8 76. Kf3 { d=4 n=29 fw=29 legal=11 } 76... Kg8 77. f5 { d=4 n=76 fw=76 legal=10 } 77... Bg7 78. Kg2 { d=4 n=114 fw=114 legal=11 } 78... Bb2 79. g4 { d=4 n=64 fw=64 legal=11 } 79... Be5 80. g5 { d=4 n=57 fw=57 legal=10 } 80... Bc7 81. Kf3 { d=4 n=80 fw=80 legal=10 } 81... Kg7 82. Kg2 { d=4 n=120 fw=120 legal=10 } 82... Bd8 83. g6 { d=4 n=118 fw=118 legal=12 } 83... Bb6 84. Kf3 { d=4 n=66 fw=66 legal=9 } 84... Ba7 85. Kg4 { d=4 n=92 fw=92 legal=9 } 85... Bc5 86. Kh5 { d=4 n=104 fw=104 legal=10 } 86... Ba3 87. Kh4 { d=4 n=74 fw=74 legal=4 } 87... Bd6 88. Kg5 { d=4 n=75 fw=75 legal=7 } 88... Be5 89. f6+ { d=4 n=42 fw=42 legal=6 } 89... Bxf6+ 90. Kh5 { d=4 n=68 fw=68 legal=4 } 90... Ba1 91. Kg4 { d=4 n=48 fw=48 legal=5 } 91... Kf8 92. Kg3 { d=4 n=120 fw=120 legal=11 } 92... Bc3 93. Kh2 { d=4 n=105 fw=105 legal=11 } 93... Bg7 94. Kh1 { d=4 n=68 fw=68 legal=7 } 94... Ke7 95. Kg2 { d=4 n=68 fw=68 legal=5 } 95... Bb2 96. g7 { d=4 n=82 fw=82 legal=11 } 96... Kf7 97. Kf1 { d=4 n=111 fw=111 legal=14 } 97... Kg8 98. Kg2 { d=4 n=63 fw=63 legal=7 } 98... Bc3 99. Kf1 { d=4 n=145 fw=145 legal=10 } 99... Ba5 100. Ke2 { d=4 n=60 fw=60 legal=6 } 100... Bc3 *", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"Stockfish\"]\n[Black \"R\u00e9seau de neurones\"]\n[Result \"1-0\"]\n\n1. d4 g6 { d=4 n=43 fw=43 legal=20 } 2. c4 Bg7 { d=4 n=20 fw=20 legal=21 } 3. Nc3 d6 { d=4 n=49 fw=49 legal=25 } 4. g3 Nf6 { d=4 n=57 fw=57 legal=32 } 5. Bg2 O-O { d=4 n=17 fw=17 legal=34 } 6. h3 Nc6 { d=4 n=55 fw=55 legal=32 } 7. Bg5 Nd7 { d=4 n=103 fw=103 legal=32 } 8. d5 Nce5 { d=4 n=56 fw=56 legal=30 } 9. Nf3 Nxc4 { d=4 n=84 fw=84 legal=27 } 10. Qc1 Nc5 { d=4 n=91 fw=91 legal=34 } 11. b4 Nd7 { d=4 n=89 fw=89 legal=41 } 12. O-O b5 { d=4 n=97 fw=97 legal=34 } 13. Nxb5 Bb7 { d=4 n=150 fw=150 legal=36 } 14. Bh6 a6 { d=4 n=149 fw=149 legal=40 } 15. Bxg7 axb5 { d=4 n=40 fw=40 legal=34 } 16. Bxf8 Qxf8 { d=4 n=88 fw=88 legal=40 } 17. e4 Nde5 { d=4 n=85 fw=85 legal=43 } 18. Nd4 Ba6 { d=4 n=113 fw=113 legal=41 } 19. Qc2 Qc8 { d=4 n=133 fw=133 legal=34 } 20. Qc3 Qb7 { d=4 n=130 fw=130 legal=35 } 21. h4 Rb8 { d=4 n=170 fw=170 legal=34 } 22. Rfc1 Ng4 { d=4 n=139 fw=139 legal=33 } 23. a4 bxa4 { d=4 n=62 fw=62 legal=37 } 24. Rxa4 Nb6 { d=4 n=124 fw=124 legal=39 } 25. Ra3 Nc4 { d=4 n=167 fw=167 legal=39 } 26. Ra4 Nb6 { d=4 n=124 fw=124 legal=39 } 27. Ra5 Nc4 { d=4 n=150 fw=150 legal=39 } 28. Nc6 Nxa5 { d=4 n=162 fw=162 legal=34 } 29. Nxb8 Nc6 { d=4 n=66 fw=66 legal=33 } 30. Nxc6 Ne5 { d=4 n=106 fw=106 legal=27 } 31. Ra1 Nd7 { d=4 n=76 fw=76 legal=28 } 32. Qe1 Nb6 { d=4 n=159 fw=159 legal=29 } 33. Rc1 Nd7 { d=4 n=152 fw=152 legal=26 } 34. Kh2 Nf6 { d=4 n=111 fw=111 legal=29 } 35. Bh3 Bb5 { d=4 n=154 fw=154 legal=27 } 36. Kg1 Ne8 { d=4 n=135 fw=135 legal=28 } 37. Kh2 Qa6 { d=4 n=116 fw=116 legal=26 } 38. Bg2 Bc4 { d=4 n=147 fw=147 legal=29 } 39. Ra1 Qb6 { d=4 n=131 fw=131 legal=31 } 40. Nxe7+ Kf8 { d=4 n=48 fw=48 legal=3 } 41. Nf5 gxf5 { d=4 n=44 fw=44 legal=30 } 42. exf5 Qxb4 { d=4 n=146 fw=146 legal=29 } 43. Qc1 Qb5 { d=4 n=155 fw=155 legal=32 } 44. Qd2 Qb6 { d=4 n=146 fw=146 legal=30 } 45. Kg1 Qb5 { d=4 n=138 fw=138 legal=33 } 46. h5 Qb8 { d=4 n=155 fw=155 legal=29 } 47. Qc1 Bd3 { d=4 n=125 fw=125 legal=28 } 48. Qh6+ Kg8 { d=4 n=60 fw=60 legal=3 } 49. Qg5+ Kf8 { d=4 n=58 fw=58 legal=3 } 50. Re1 Qb2 { d=4 n=141 fw=141 legal=26 } 51. h6 Qc3 { d=4 n=133 fw=133 legal=35 } 52. Qg8+ Kxg8 { d=4 n=26 fw=26 legal=1 } 53. Rxe8# 1-0", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"R\u00e9seau de neurones\"]\n[Black \"Stockfish\"]\n[Result \"0-1\"]\n\n1. e4 { d=4 n=52 fw=52 legal=20 } 1... c6 2. d4 { d=4 n=29 fw=29 legal=30 } 2... a6 3. Nc3 { d=4 n=43 fw=43 legal=38 } 3... d5 4. e5 { d=4 n=43 fw=43 legal=39 } 4... Bf5 5. f4 { d=4 n=82 fw=82 legal=39 } 5... Nd7 6. Be3 { d=4 n=50 fw=50 legal=35 } 6... e6 7. Nf3 { d=4 n=76 fw=76 legal=38 } 7... Bb4 8. a3 { d=4 n=68 fw=68 legal=31 } 8... Be7 9. Be2 { d=4 n=98 fw=98 legal=39 } 9... h5 10. h3 { d=4 n=110 fw=110 legal=39 } 10... c5 11. g4 { d=4 n=77 fw=77 legal=41 } 11... hxg4 12. hxg4 { d=4 n=29 fw=29 legal=40 } 12... Rxh1+ 13. Kf2 { d=4 n=47 fw=47 legal=5 } 13... Bh4+ 14. Kg2 { d=4 n=56 fw=56 legal=2 } 14... Rxd1 15. Bxd1 { d=4 n=61 fw=61 legal=35 } 15... Bxg4 16. Nxh4 { d=4 n=120 fw=120 legal=30 } 16... Nh6 17. Kg3 { d=4 n=140 fw=140 legal=31 } 17... g5 18. fxg5 { d=4 n=54 fw=54 legal=30 } 18... cxd4 19. Bxd4 { d=4 n=62 fw=62 legal=32 } 19... Qxg5 20. Bxg4 { d=4 n=105 fw=105 legal=29 } 20... Qxg4+ 21. Kf2 { d=4 n=39 fw=39 legal=2 } 21... Qxd4+ 22. Ke2 { d=4 n=122 fw=122 legal=6 } 22... Qxh4 23. Rh1 { d=4 n=131 fw=131 legal=24 } 23... Qxh1 24. Nd1 { d=4 n=166 fw=166 legal=14 } 24... Nxe5 25. Kf2 { d=4 n=99 fw=99 legal=11 } 25... Qh2+ 26. Ke1 { d=4 n=80 fw=80 legal=3 } 26... Nf3+ 27. Kf1 { d=4 n=29 fw=29 legal=1 } 27... Nf5 28. c4 { d=4 n=86 fw=86 legal=8 } 28... Ng3# 0-1", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"Stockfish\"]\n[Black \"R\u00e9seau de neurones\"]\n[Result \"1-0\"]\n\n1. c4 g6 { d=4 n=89 fw=89 legal=20 } 2. e4 Bg7 { d=4 n=20 fw=20 legal=21 } 3. Nc3 d6 { d=4 n=60 fw=60 legal=26 } 4. Nge2 Nf6 { d=4 n=68 fw=68 legal=33 } 5. h3 O-O { d=4 n=26 fw=26 legal=34 } 6. g3 Nc6 { d=4 n=41 fw=41 legal=32 } 7. d3 e5 { d=4 n=14 fw=14 legal=33 } 8. Bg5 h6 { d=4 n=84 fw=84 legal=31 } 9. Bc1 Be6 { d=4 n=78 fw=78 legal=32 } 10. b3 Nd7 { d=4 n=88 fw=88 legal=37 } 11. Be3 Nc5 { d=4 n=115 fw=115 legal=37 } 12. a3 a5 { d=4 n=124 fw=124 legal=42 } 13. Rc1 Nxb3 { d=4 n=144 fw=144 legal=43 } 14. Qxb3 Nd4 { d=4 n=110 fw=110 legal=37 } 15. Bxd4 exd4 { d=4 n=29 fw=29 legal=35 } 16. Nb1 b5 { d=4 n=89 fw=89 legal=35 } 17. Qxb5 Qf6 { d=4 n=165 fw=165 legal=33 } 18. Qc6 Rab8 { d=4 n=154 fw=154 legal=33 } 19. Nf4 Bc8 { d=4 n=143 fw=143 legal=35 } 20. Qxc7 Re8 { d=4 n=160 fw=160 legal=32 } 21. Qxb8 Bd7 { d=4 n=148 fw=148 legal=30 } 22. Qb6 Qg5 { d=4 n=168 fw=168 legal=34 } 23. Qxd6 Bxh3 { d=4 n=128 fw=128 legal=40 } 24. Rxh3 Bf8 { d=4 n=135 fw=135 legal=32 } 25. Qxd4 Bxa3 { d=4 n=121 fw=121 legal=32 } 26. Rc2 Qg4 { d=4 n=163 fw=163 legal=35 } 27. Nxa3 Qd7 { d=4 n=115 fw=115 legal=29 } 28. Qxd7 Re5 { d=4 n=124 fw=124 legal=18 } 29. Rxh6 Re8 { d=4 n=106 fw=106 legal=16 } 30. Qxe8+ Kg7 { d=4 n=24 fw=24 legal=1 } 31. f3 Kf6 { d=4 n=55 fw=55 legal=6 } 32. Qd8+ Ke5 { d=4 n=51 fw=51 legal=2 } 33. d4# 1-0", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"R\u00e9seau de neurones\"]\n[Black \"Stockfish\"]\n[Result \"0-1\"]\n\n1. e4 { d=4 n=52 fw=52 legal=20 } 1... e5 2. Nf3 { d=4 n=20 fw=20 legal=29 } 2... d5 3. exd5 { d=4 n=42 fw=42 legal=28 } 3... Nd7 4. Bb5 { d=4 n=57 fw=57 legal=28 } 4... Nf6 5. Bc4 { d=4 n=128 fw=128 legal=34 } 5... Bc5 6. c3 { d=4 n=74 fw=74 legal=31 } 6... O-O 7. d4 { d=4 n=66 fw=66 legal=32 } 7... Nb6 8. Nxe5 { d=4 n=93 fw=93 legal=41 } 8... Nxc4 9. Nxc4 { d=4 n=51 fw=51 legal=41 } 9... Re8+ 10. Ne3 { d=4 n=114 fw=114 legal=6 } 10... Bg4 11. f3 { d=4 n=99 fw=99 legal=28 } 11... Nxd5 12. fxg4 { d=4 n=59 fw=59 legal=27 } 12... Nxe3 13. Qd3 { d=4 n=51 fw=51 legal=27 } 13... Nxg4+ 14. Kf1 { d=4 n=87 fw=87 legal=7 } 14... Qf6+ 15. Bf4 { d=4 n=81 fw=81 legal=4 } 15... Qxf4+ 16. Qf3 { d=4 n=56 fw=56 legal=2 } 16... Qc1+ 17. Qd1 { d=4 n=31 fw=31 legal=1 } 17... Qxd1# 0-1", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"Stockfish\"]\n[Black \"R\u00e9seau de neurones\"]\n[Result \"1-0\"]\n\n1. Nf3 g6 { d=4 n=82 fw=82 legal=20 } 2. Nc3 Bg7 { d=4 n=20 fw=20 legal=21 } 3. e4 c6 { d=4 n=48 fw=48 legal=26 } 4. Be2 d5 { d=4 n=37 fw=37 legal=27 } 5. exd5 cxd5 { d=4 n=18 fw=18 legal=36 } 6. a3 Nc6 { d=4 n=45 fw=45 legal=35 } 7. d4 Nf6 { d=4 n=35 fw=35 legal=36 } 8. O-O O-O { d=4 n=50 fw=50 legal=37 } 9. Be3 Bg4 { d=4 n=90 fw=90 legal=35 } 10. Re1 Ne4 { d=4 n=67 fw=67 legal=39 } 11. h3 Bh5 { d=4 n=31 fw=31 legal=48 } 12. g4 Bxg4 { d=4 n=28 fw=28 legal=41 } 13. hxg4 Rc8 { d=4 n=23 fw=23 legal=41 } 14. Nxe4 dxe4 { d=4 n=30 fw=30 legal=33 } 15. Nd2 Bxd4 { d=4 n=107 fw=107 legal=34 } 16. Bf1 Bxb2 { d=4 n=58 fw=58 legal=37 } 17. Ra2 Bxa3 { d=4 n=109 fw=109 legal=41 } 18. Nxe4 Qa5 { d=4 n=64 fw=64 legal=38 } 19. Bd2 Qd8 { d=4 n=120 fw=120 legal=44 } 20. Bh6 Qa5 { d=4 n=78 fw=78 legal=35 } 21. Bd2 Qd8 { d=4 n=120 fw=120 legal=44 } 22. Rxa3 f5 { d=4 n=162 fw=162 legal=32 } 23. Bc4+ Kg7 { d=4 n=64 fw=64 legal=5 } 24. Ng5 Ne5 { d=4 n=111 fw=111 legal=36 } 25. Ba2 fxg4 { d=4 n=46 fw=46 legal=42 } 26. Rf1 Qd7 { d=4 n=135 fw=135 legal=44 } 27. Rc3 Rf5 { d=4 n=117 fw=117 legal=48 } 28. Be6 Qd8 { d=4 n=105 fw=105 legal=47 } 29. Rxc8 Qd6 { d=4 n=153 fw=153 legal=38 } 30. Re1 Rxg5 { d=4 n=103 fw=103 legal=37 } 31. Rxe5 Rxe5 { d=4 n=62 fw=62 legal=28 } 32. Rg8+ Kf6 { d=4 n=35 fw=35 legal=1 } 33. Bxg4 Qd5 { d=4 n=165 fw=165 legal=36 } 34. Rf8+ Kg7 { d=4 n=37 fw=37 legal=2 } 35. Rf4 Rg5 { d=4 n=111 fw=111 legal=39 } 36. Qe2 h6 { d=4 n=165 fw=165 legal=37 } 37. Qxe7+ Kg8 { d=4 n=71 fw=71 legal=3 } 38. Rf8# 1-0", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"R\u00e9seau de neurones\"]\n[Black \"Stockfish\"]\n[Result \"0-1\"]\n\n1. e4 { d=4 n=52 fw=52 legal=20 } 1... c5 2. Nf3 { d=4 n=26 fw=26 legal=30 } 2... a6 3. d4 { d=4 n=58 fw=58 legal=28 } 3... cxd4 4. Nxd4 { d=4 n=34 fw=34 legal=37 } 4... e6 5. c3 { d=4 n=86 fw=86 legal=42 } 5... d5 6. Bd3 { d=4 n=53 fw=53 legal=45 } 6... h6 7. Qe2 { d=4 n=65 fw=65 legal=48 } 7... Bc5 8. exd5 { d=4 n=88 fw=88 legal=45 } 8... Qxd5 9. Nf3 { d=4 n=103 fw=103 legal=50 } 9... Ne7 10. O-O { d=4 n=40 fw=40 legal=44 } 10... Nd7 11. c4 { d=4 n=126 fw=126 legal=41 } 11... Qd6 12. Nc3 { d=4 n=56 fw=56 legal=38 } 12... Nf6 13. Ne4 { d=4 n=101 fw=101 legal=43 } 13... Qb6 14. Nc3 { d=4 n=92 fw=92 legal=37 } 14... Ng6 15. Na4 { d=4 n=119 fw=119 legal=42 } 15... Nf4 16. Bxf4 { d=4 n=75 fw=75 legal=37 } 16... Bxf2+ 17. Rxf2 { d=4 n=65 fw=65 legal=3 } 17... Qa7 18. Ne5 { d=4 n=136 fw=136 legal=49 } 18... b6 19. Nc6 { d=4 n=110 fw=110 legal=48 } 19... Qb7 20. Nxb6 { d=4 n=97 fw=97 legal=56 } 20... Qxb6 21. Nb4 { d=4 n=117 fw=117 legal=52 } 21... Qxb4 22. Rb1 { d=4 n=111 fw=111 legal=45 } 22... Qb6 23. b4 { d=4 n=105 fw=105 legal=43 } 23... Bd7 24. c5 { d=4 n=127 fw=127 legal=45 } 24... Qb7 25. Bd6 { d=4 n=107 fw=107 legal=50 } 25... Bb5 26. Bxb5+ { d=4 n=109 fw=109 legal=48 } 26... axb5 27. Qxb5+ { d=4 n=110 fw=110 legal=44 } 27... Qxb5 28. Rf3 { d=4 n=126 fw=126 legal=31 } 28... O-O-O 29. Rc1 { d=4 n=143 fw=143 legal=35 } 29... Qxb4 30. Be7 { d=4 n=155 fw=155 legal=37 } 30... Rd2 31. c6 { d=4 n=98 fw=98 legal=33 } 31... Qxe7 32. a4 { d=4 n=119 fw=119 legal=30 } 32... Qa7+ 33. Kh1 { d=4 n=81 fw=81 legal=5 } 33... Qxa4 34. h3 { d=4 n=152 fw=152 legal=28 } 34... e5 35. Rg3 { d=4 n=138 fw=138 legal=27 } 35... g6 36. Rf3 { d=4 n=128 fw=128 legal=23 } 36... Qh4 37. Rb1 { d=4 n=136 fw=136 legal=26 } 37... Rc2 38. Rbf1 { d=4 n=108 fw=108 legal=29 } 38... Qg5 39. Rd1 { d=4 n=160 fw=160 legal=23 } 39... Qxg2# 0-1", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"Stockfish\"]\n[Black \"R\u00e9seau de neurones\"]\n[Result \"1-0\"]\n\n1. d4 g6 { d=4 n=43 fw=43 legal=20 } 2. c4 Bg7 { d=4 n=20 fw=20 legal=21 } 3. e4 d6 { d=4 n=34 fw=34 legal=25 } 4. Nf3 Nf6 { d=4 n=34 fw=34 legal=32 } 5. Nc3 O-O { d=4 n=15 fw=15 legal=34 } 6. Bd3 Nc6 { d=4 n=58 fw=58 legal=32 } 7. d5 Nb8 { d=4 n=69 fw=69 legal=32 } 8. O-O e5 { d=4 n=93 fw=93 legal=31 } 9. c5 dxc5 { d=4 n=76 fw=76 legal=30 } 10. Nxe5 Nxd5 { d=4 n=100 fw=100 legal=32 } 11. exd5 Bxe5 { d=4 n=39 fw=39 legal=33 } 12. h3 Nd7 { d=4 n=124 fw=124 legal=39 } 13. Be3 Bd6 { d=4 n=117 fw=117 legal=32 } 14. Re1 Re8 { d=4 n=143 fw=143 legal=29 } 15. Qd2 Be5 { d=4 n=144 fw=144 legal=36 } 16. Rad1 a6 { d=4 n=176 fw=176 legal=35 } 17. Ne4 Bg7 { d=4 n=166 fw=166 legal=36 } 18. d6 cxd6 { d=4 n=114 fw=114 legal=37 } 19. Nxd6 Re7 { d=4 n=113 fw=113 legal=39 } 20. Bc4 Ne5 { d=4 n=113 fw=113 legal=33 } 21. Nxf7 Qxd2 { d=4 n=62 fw=62 legal=41 } 22. Nxe5+ Kf8 { d=4 n=35 fw=35 legal=6 } 23. Rxd2 Bxe5 { d=4 n=29 fw=29 legal=24 } 24. Bxc5 Bf5 { d=4 n=101 fw=101 legal=27 } 25. Rxe5 Be6 { d=4 n=94 fw=94 legal=22 } 26. Rxe6 Rc8 { d=4 n=103 fw=103 legal=15 } 27. Rd8+ Kf7 { d=4 n=49 fw=49 legal=3 } 28. Red6+ Kg7 { d=4 n=58 fw=58 legal=2 } 29. Rxc8 Re2 { d=4 n=124 fw=124 legal=17 } 30. Bxe2 b5 { d=4 n=106 fw=106 legal=8 } 31. Rc7+ Kf8 { d=4 n=35 fw=35 legal=4 } 32. Rxa6+ Ke8 { d=4 n=32 fw=32 legal=2 } 33. Bxb5+ Kd8 { d=4 n=27 fw=27 legal=1 } 34. Rxh7 Kc8 { d=4 n=26 fw=26 legal=2 } 35. Rxg6 Kb8 { d=4 n=35 fw=35 legal=2 } 36. Rg8# 1-0", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"R\u00e9seau de neurones\"]\n[Black \"Stockfish\"]\n[Result \"0-1\"]\n\n1. e4 { d=4 n=52 fw=52 legal=20 } 1... e5 2. Nf3 { d=4 n=20 fw=20 legal=29 } 2... d5 3. exd5 { d=4 n=42 fw=42 legal=28 } 3... Bd6 4. d4 { d=4 n=84 fw=84 legal=27 } 4... exd4 5. Qxd4 { d=4 n=76 fw=76 legal=36 } 5... Qf6 6. Be2 { d=4 n=191 fw=191 legal=49 } 6... Qxd4 7. Nxd4 { d=4 n=22 fw=22 legal=34 } 7... Nf6 8. Nc3 { d=4 n=63 fw=63 legal=41 } 8... Be5 9. Be3 { d=4 n=122 fw=122 legal=43 } 9... O-O 10. Bf3 { d=4 n=166 fw=166 legal=46 } 10... Re8 11. Ndb5 { d=4 n=121 fw=121 legal=42 } 11... a6 12. Nxc7 { d=4 n=96 fw=96 legal=44 } 12... Bxc7 13. Rd1 { d=4 n=112 fw=112 legal=31 } 13... Kf8 14. Rd2 { d=4 n=134 fw=134 legal=30 } 14... Be5 15. Be2 { d=4 n=93 fw=93 legal=37 } 15... b5 16. f4 { d=4 n=101 fw=101 legal=39 } 16... Bd6 17. g4 { d=4 n=100 fw=100 legal=37 } 17... Rxe3 18. Rd3 { d=4 n=121 fw=121 legal=22 } 18... Re8 19. O-O { d=4 n=85 fw=85 legal=27 } 19... Nbd7 20. Bf3 { d=4 n=87 fw=87 legal=32 } 20... Ra7 21. g5 { d=4 n=74 fw=74 legal=32 } 21... Nxd5 22. Rxd5 { d=4 n=68 fw=68 legal=37 } 22... Bxf4 23. Kg2 { d=4 n=155 fw=155 legal=39 } 23... Kg8 24. Rd2 { d=4 n=152 fw=152 legal=40 } 24... Ne5 25. Re1 { d=4 n=173 fw=173 legal=43 } 25... Bxd2 26. Nd1 { d=4 n=154 fw=154 legal=39 } 26... Bxe1 27. Ne3 { d=4 n=118 fw=118 legal=23 } 27... Rd7 28. Be2 { d=4 n=148 fw=148 legal=28 } 28... Rd2 29. Nd5 { d=4 n=112 fw=112 legal=18 } 29... Rxd5 30. c3 { d=4 n=147 fw=147 legal=20 } 30... Rd2 31. Kf1 { d=4 n=62 fw=62 legal=11 } 31... Bh4 32. Bh5 { d=4 n=136 fw=136 legal=16 } 32... Rf2+ 33. Ke1 { d=4 n=43 fw=43 legal=2 } 33... Nf3+ 34. Kd1 { d=4 n=29 fw=29 legal=1 } 34... Re1# 0-1", "[Event \"?\"]\n[Site \"?\"]\n[Date \"????.??.??\"]\n[Round \"?\"]\n[White \"Stockfish\"]\n[Black \"R\u00e9seau de neurones\"]\n[Result \"1-0\"]\n\n1. Nf3 g6 { d=4 n=82 fw=82 legal=20 } 2. c4 Bg7 { d=4 n=23 fw=23 legal=21 } 3. d4 d6 { d=4 n=31 fw=31 legal=25 } 4. Nc3 Nc6 { d=4 n=45 fw=45 legal=32 } 5. Qa4 Bd7 { d=4 n=98 fw=98 legal=28 } 6. Be3 e5 { d=4 n=86 fw=86 legal=34 } 7. Qd1 exd4 { d=4 n=42 fw=42 legal=38 } 8. Nxd4 Ne5 { d=4 n=93 fw=93 legal=39 } 9. Qb3 Nf6 { d=4 n=96 fw=96 legal=41 } 10. Bg5 O-O { d=4 n=67 fw=67 legal=39 } 11. e3 c6 { d=4 n=129 fw=129 legal=38 } 12. Rd1 Qb6 { d=4 n=117 fw=117 legal=36 } 13. Bxf6 Bxf6 { d=4 n=30 fw=30 legal=38 } 14. Be2 c5 { d=4 n=163 fw=163 legal=42 } 15. Qxb6 axb6 { d=4 n=37 fw=37 legal=38 } 16. Nc2 Rfd8 { d=4 n=129 fw=129 legal=41 } 17. f4 Nc6 { d=4 n=95 fw=95 legal=39 } 18. h4 Be6 { d=4 n=116 fw=116 legal=41 } 19. Kf2 Kg7 { d=4 n=116 fw=116 legal=43 } 20. h5 gxh5 { d=4 n=119 fw=119 legal=44 } 21. Bf3 Kg6 { d=4 n=141 fw=141 legal=44 } 22. g3 Bf5 { d=4 n=120 fw=120 legal=44 } 23. Bxh5+ Kg7 { d=4 n=41 fw=41 legal=2 } 24. Rd2 Be6 { d=4 n=109 fw=109 legal=44 } 25. Na3 Rd7 { d=4 n=121 fw=121 legal=41 } 26. Nd5 Bd8 { d=4 n=122 fw=122 legal=41 } 27. Be2 f5 { d=4 n=135 fw=135 legal=34 } 28. Bf3 Rf7 { d=4 n=121 fw=121 legal=33 } 29. Rdd1 Ne7 { d=4 n=118 fw=118 legal=34 } 30. Nb5 Nc6 { d=4 n=82 fw=82 legal=25 } 31. Nxd6 Be7 { d=4 n=138 fw=138 legal=35 } 32. Nxf7 Bxf7 { d=4 n=122 fw=122 legal=37 } 33. Rd2 Rd8 { d=4 n=110 fw=110 legal=39 } 34. Rhd1 Bf8 { d=4 n=122 fw=122 legal=35 } 35. a4 Rd7 { d=4 n=161 fw=161 legal=29 } 36. b3 Kg6 { d=4 n=156 fw=156 legal=28 } 37. e4 fxe4 { d=4 n=19 fw=19 legal=27 } 38. Bxe4+ Kh6 { d=4 n=98 fw=98 legal=3 } 39. Rd3 Kg7 { d=4 n=176 fw=176 legal=25 } 40. Ne3 Rxd3 { d=4 n=128 fw=128 legal=31 } 41. Rxd3 Kh6 { d=4 n=181 fw=181 legal=24 } 42. Nf5+ Kh5 { d=4 n=67 fw=67 legal=2 } 43. Ke3 Kg4 { d=4 n=118 fw=118 legal=22 } 44. a5 bxa5 { d=4 n=67 fw=67 legal=25 } 45. Rd7 Be8 { d=4 n=138 fw=138 legal=25 } 46. Rxb7 Nb4 { d=4 n=141 fw=141 legal=20 } 47. Rxh7 Nc6 { d=4 n=125 fw=125 legal=18 } 48. Rh4# 1-0"];
+let positions = [], moves = [], currentPos = 0, playInterval = null, gameHeaders = {};
+
+function fenToBoard(fen) {
+  const rows = fen.split(' ')[0].split('/');
+  const board = [];
+  for (const row of rows) {
+    const r = [];
+    for (const c of row) {
+      if (c >= '1' && c <= '8') for (let i = 0; i < +c; i++) r.push('');
+      else r.push(c);
+    }
+    board.push(r);
+  }
+  return board;
+}
+
+function loadGame(idx) {
+  const pgn = pgns[idx];
+
+  positions = ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'];
+  moves = [];
+
+  if (typeof Chess !== 'undefined') {
+    const game = new Chess();
+    game.load_pgn(pgn);
+    const history = game.history();
+    moves = history;
+
+    // Rejouer pour capturer les FEN
+    game.reset();
+    for (const m of history) {
+      game.move(m);
+      positions.push(game.fen());
+    }
+  }
+
+  currentPos = 0;
+  render();
+  renderMoveList();
+
+  // Headers
+  gameHeaders = {};
+  pgn.split('\n').forEach(l => {
+    const m = l.match(/^\[(\w+)\s+"(.+)"\]/);
+    if (m) gameHeaders[m[1]] = m[2];
+  });
+  const wName = gameHeaders.White || 'Blancs';
+  const bName = gameHeaders.Black || 'Noirs';
+  const isModelWhite = wName.includes('seau');
+  document.getElementById('whiteName').textContent = wName;
+  document.getElementById('blackName').textContent = bName;
+  document.getElementById('whiteTag').textContent = isModelWhite ? '🤖 réseau de neurones' : '♟ stockfish';
+  document.getElementById('whiteTag').className = 'player-tag ' + (isModelWhite ? 'model' : 'stockfish');
+  document.getElementById('blackTag').textContent = isModelWhite ? '♟ stockfish' : '🤖 réseau de neurones';
+  document.getElementById('blackTag').className = 'player-tag ' + (isModelWhite ? 'stockfish' : 'model');
+  document.getElementById('info').textContent = `Résultat : ${gameHeaders.Result || '?'}`;
+}
+
+function render() {
+  const fen = positions[currentPos] || positions[0];
+  const board = fenToBoard(fen);
+  const turn = (fen.split(' ')[1] || 'w') === 'w' ? 'white' : 'black';
+  let html = '';
+
+  for (let r = 0; r < 8; r++) {
+    html += '<div class="row">';
+    for (let c = 0; c < 8; c++) {
+      const light = (r + c) % 2 === 0;
+      const piece = board[r][c];
+      const colorCls = piece ? (WHITE_PIECES.has(piece) ? 'white-piece' : 'black-piece') : '';
+      html += `<div class="sq ${light?'light':'dark'} ${colorCls}">${piece ? PIECES[piece] || '' : ''}</div>`;
+    }
+    html += '</div>';
+  }
+  document.getElementById('board').innerHTML = html;
+
+  // Mettre à jour qui joue
+  document.getElementById('whiteTurn').textContent = turn === 'white' ? '◄ au trait' : '';
+  document.getElementById('blackTurn').textContent = turn === 'black' ? '◄ au trait' : '';
+
+  renderMoveList();
+}
+
+function renderMoveList() {
+  let html = '';
+  for (let i = 0; i < moves.length; i++) {
+    if (i % 2 === 0) html += `${Math.floor(i/2)+1}. `;
+    const cls = i === currentPos - 1 ? 'current' : '';
+    html += `<span class="${cls}" style="cursor:pointer" onclick="goTo(${i+1})">${moves[i]}</span> `;
+  }
+  document.getElementById('moveList').innerHTML = html;
+}
+
+function step(dir) {
+  const next = currentPos + dir;
+  if (next >= 0 && next < positions.length) { currentPos = next; render(); }
+}
+
+function goTo(idx) {
+  if (idx >= 0 && idx < positions.length) { currentPos = idx; render(); }
+}
+
+function togglePlay() {
+  if (playInterval) {
+    clearInterval(playInterval);
+    playInterval = null;
+    document.getElementById('playBtn').textContent = '▶ Play';
+  } else {
+    document.getElementById('playBtn').textContent = '⏸ Pause';
+    playInterval = setInterval(() => {
+      if (currentPos >= positions.length - 1) { togglePlay(); return; }
+      step(1);
+    }, 800);
+  }
+}
+
+// Populate game selector
+pgns.forEach((pgn, i) => {
+  const opt = document.createElement('option');
+  const headers = {};
+  pgn.split('\n').forEach(l => {
+    const m = l.match(/^\[(\w+)\s+"(.+)"\]/);
+    if (m) headers[m[1]] = m[2];
+  });
+  opt.value = i;
+  opt.textContent = `Partie ${i+1}: ${headers.White||'?'} vs ${headers.Black||'?'} (${headers.Result||'?'})`;
+  document.getElementById('gameSelect').appendChild(opt);
+});
+
+// Load chess.js from CDN for move replay
+const s = document.createElement('script');
+s.src = 'https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js';
+s.onload = () => loadGame(0);
+document.head.appendChild(s);
+</script>
+</body>
+</html>

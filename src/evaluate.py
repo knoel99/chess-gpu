@@ -74,13 +74,13 @@ def build_token_to_move(move_tokens):
 def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
     """Retourne les k meilleurs coups légaux avec leurs probabilités."""
     x = board_to_vector(board)
-    # Utiliser le même type que W1 (numpy ou cupy)
-    _xp = type(W1)
-    if hasattr(W1, '__array_namespace__') or 'cupy' in str(type(W1)):
+    # Détecter le backend depuis le type des poids (numpy ou cupy)
+    _mod = type(W1).__module__.split(".")[0]  # 'numpy' ou 'cupy'
+    if _mod == "cupy":
         import cupy as _xp
     else:
         _xp = np
-    x_arr = _xp.array(x.reshape(1, -1))
+    x_arr = _xp.asarray(x.reshape(1, -1))
 
     z1 = x_arr @ W1.T + b1
     a1 = _xp.maximum(z1, 0)
@@ -616,7 +616,11 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
     if parallel:
         from concurrent.futures import ProcessPoolExecutor, as_completed
+        import multiprocessing as mp
         import sys
+
+        # "spawn" pour éviter que les workers héritent de CuPy (fork + CUDA = crash)
+        ctx = mp.get_context("spawn")
 
         tasks = []
         for i in range(n_games):
@@ -625,7 +629,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
                          sf_path, stockfish_elo, model_color, think_time, i, None))
 
         game_results = [None] * n_games
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
             futures = {executor.submit(_play_game_worker, t): i
                       for i, t in enumerate(tasks)}
 

@@ -185,23 +185,40 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
     X_train, X_val = X[indices[:split]], X[indices[split:]]
     y_train, y_val = y[indices[:split]], y[indices[split:]]
 
-    # Tensors
-    train_ds = TensorDataset(
-        torch.from_numpy(X_train).float(),
-        torch.from_numpy(y_train).long()
-    )
-    val_ds = TensorDataset(
-        torch.from_numpy(X_val).float(),
-        torch.from_numpy(y_val).long()
-    )
+    # Charger tout sur GPU si assez de VRAM (sinon DataLoader classique)
+    data_bytes = (X_train.nbytes + X_val.nbytes) * 2 + (y_train.nbytes + y_val.nbytes)
+    use_gpu_data = (device.type == "cuda" and
+                    data_bytes < torch.cuda.get_device_properties(0).total_memory * 0.7)
 
-    n_workers = min(8, os.cpu_count() or 2)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=n_workers, pin_memory=True,
-                              drop_last=True, persistent_workers=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size * 2, shuffle=False,
-                            num_workers=n_workers, pin_memory=True,
-                            persistent_workers=True)
+    if use_gpu_data:
+        print(f"  ⚡ Chargement complet sur GPU ({data_bytes / 1024**3:.1f} Go)")
+        X_train_t = torch.from_numpy(X_train).float().to(device)
+        y_train_t = torch.from_numpy(y_train).long().to(device)
+        X_val_t = torch.from_numpy(X_val).float().to(device)
+        y_val_t = torch.from_numpy(y_val).long().to(device)
+        del X_train, X_val, y_train, y_val
+        n_train = X_train_t.shape[0]
+        n_val_total = X_val_t.shape[0]
+        n_train_batches = (n_train + batch_size - 1) // batch_size
+        n_val_batches = (n_val_total + batch_size * 2 - 1) // (batch_size * 2)
+        train_loader = None
+        val_loader = None
+    else:
+        train_ds = TensorDataset(
+            torch.from_numpy(X_train).float(),
+            torch.from_numpy(y_train).long()
+        )
+        val_ds = TensorDataset(
+            torch.from_numpy(X_val).float(),
+            torch.from_numpy(y_val).long()
+        )
+        n_workers = min(8, os.cpu_count() or 2)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  num_workers=n_workers, pin_memory=True,
+                                  drop_last=True, persistent_workers=True)
+        val_loader = DataLoader(val_ds, batch_size=batch_size * 2, shuffle=False,
+                                num_workers=n_workers, pin_memory=True,
+                                persistent_workers=True)
 
     # Modèle
     model = ChessNet(D, n_classes, hidden=hidden, dropout=dropout).to(device)
@@ -267,39 +284,80 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         epoch_loss = 0.0
         n_batches = 0
 
-        for i, (xb, yb) in enumerate(train_loader):
-            xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+        if use_gpu_data:
+            perm = torch.randperm(n_train, device=device)
+            total_batches = n_train_batches
+            for i in range(total_batches):
+                start = i * batch_size
+                end = min(start + batch_size, n_train)
+                idx = perm[start:end]
+                xb, yb = X_train_t[idx], y_train_t[idx]
 
-            optimizer.zero_grad(set_to_none=True)
-            if use_amp:
-                with torch.amp.autocast("cuda"):
+                optimizer.zero_grad(set_to_none=True)
+                if use_amp:
+                    with torch.amp.autocast("cuda"):
+                        logits = model(xb)
+                        loss = criterion(logits, yb)
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
                     logits = model(xb)
                     loss = criterion(logits, yb)
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                logits = model(xb)
-                loss = criterion(logits, yb)
-                loss.backward()
-                optimizer.step()
+                    loss.backward()
+                    optimizer.step()
 
-            epoch_loss += loss.item()
-            n_batches += 1
+                epoch_loss += loss.item()
+                n_batches += 1
 
-            if (i + 1) % 20 == 0 or i == len(train_loader) - 1:
-                elapsed = time.time() - t0
-                rate = (i + 1) / elapsed if elapsed > 0 else 0
-                eta = (len(train_loader) - i - 1) / rate if rate > 0 else 0
-                pct = (i + 1) / len(train_loader)
-                bar_len = 30
-                filled = int(bar_len * pct)
-                bar = "█" * filled + "░" * (bar_len - filled)
-                print(f"\r  Epoch {epoch:3d}/{epochs} │{bar}│ "
-                      f"{i+1:>4d}/{len(train_loader)} │ "
-                      f"loss={loss.item():.4f} │ "
-                      f"{format_time(elapsed)} │ ETA {format_time(eta)}",
-                      end="", flush=True)
+                if (i + 1) % 50 == 0 or i == total_batches - 1:
+                    elapsed = time.time() - t0
+                    rate = (i + 1) / elapsed if elapsed > 0 else 0
+                    eta = (total_batches - i - 1) / rate if rate > 0 else 0
+                    pct = (i + 1) / total_batches
+                    bar_len = 30
+                    filled = int(bar_len * pct)
+                    bar = "█" * filled + "░" * (bar_len - filled)
+                    print(f"\r  Epoch {epoch:3d}/{epochs} │{bar}│ "
+                          f"{i+1:>5d}/{total_batches} │ "
+                          f"loss={loss.item():.4f} │ "
+                          f"{format_time(elapsed)} │ ETA {format_time(eta)}",
+                          end="", flush=True)
+        else:
+            total_batches = len(train_loader)
+            for i, (xb, yb) in enumerate(train_loader):
+                xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+                if use_amp:
+                    with torch.amp.autocast("cuda"):
+                        logits = model(xb)
+                        loss = criterion(logits, yb)
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    logits = model(xb)
+                    loss = criterion(logits, yb)
+                    loss.backward()
+                    optimizer.step()
+
+                epoch_loss += loss.item()
+                n_batches += 1
+
+                if (i + 1) % 20 == 0 or i == total_batches - 1:
+                    elapsed = time.time() - t0
+                    rate = (i + 1) / elapsed if elapsed > 0 else 0
+                    eta = (total_batches - i - 1) / rate if rate > 0 else 0
+                    pct = (i + 1) / total_batches
+                    bar_len = 30
+                    filled = int(bar_len * pct)
+                    bar = "█" * filled + "░" * (bar_len - filled)
+                    print(f"\r  Epoch {epoch:3d}/{epochs} │{bar}│ "
+                          f"{i+1:>4d}/{total_batches} │ "
+                          f"loss={loss.item():.4f} │ "
+                          f"{format_time(elapsed)} │ ETA {format_time(eta)}",
+                          end="", flush=True)
 
         epoch_loss /= n_batches
         current_lr = optimizer.param_groups[0]["lr"]
@@ -313,18 +371,35 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         n_val = 0
 
         with torch.no_grad():
-            for xb, yb in val_loader:
-                xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
-                if use_amp:
-                    with torch.amp.autocast("cuda"):
+            if use_gpu_data:
+                vbs = batch_size * 2
+                for i in range(n_val_batches):
+                    start = i * vbs
+                    end = min(start + vbs, n_val_total)
+                    xb, yb = X_val_t[start:end], y_val_t[start:end]
+                    if use_amp:
+                        with torch.amp.autocast("cuda"):
+                            logits = model(xb)
+                            val_loss += criterion(logits, yb).item() * len(yb)
+                    else:
                         logits = model(xb)
                         val_loss += criterion(logits, yb).item() * len(yb)
-                else:
-                    logits = model(xb)
-                    val_loss += criterion(logits, yb).item() * len(yb)
-                val_top1 += accuracy_topk(logits, yb, k=1) * len(yb)
-                val_top5 += accuracy_topk(logits, yb, k=5) * len(yb)
-                n_val += len(yb)
+                    val_top1 += accuracy_topk(logits, yb, k=1) * len(yb)
+                    val_top5 += accuracy_topk(logits, yb, k=5) * len(yb)
+                    n_val += len(yb)
+            else:
+                for xb, yb in val_loader:
+                    xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+                    if use_amp:
+                        with torch.amp.autocast("cuda"):
+                            logits = model(xb)
+                            val_loss += criterion(logits, yb).item() * len(yb)
+                    else:
+                        logits = model(xb)
+                        val_loss += criterion(logits, yb).item() * len(yb)
+                    val_top1 += accuracy_topk(logits, yb, k=1) * len(yb)
+                    val_top5 += accuracy_topk(logits, yb, k=5) * len(yb)
+                    n_val += len(yb)
 
         val_loss /= n_val
         val_top1 = val_top1 / n_val * 100

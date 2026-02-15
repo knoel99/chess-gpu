@@ -14,6 +14,11 @@ Usage:
 import sys
 import os
 
+# Résoudre les chemins : data/ est à la racine du repo, pas dans src/
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(REPO_ROOT, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 from download_data import run as download, run_multi as download_multi
 from prepare_data import run as prepare
 try:
@@ -64,9 +69,9 @@ def main():
     month = sys.argv[3] if len(sys.argv) > 3 else None
 
     if sys.argv[1] == "--top10":
-        pgn_path = "data/top_players.pgn"
-        npz_path = "data/top_players.npz"
-        model_path = "data/top_players_model.npz"
+        pgn_path = os.path.join(DATA_DIR, "top_players.pgn")
+        npz_path = os.path.join(DATA_DIR, "top_players.npz")
+        model_path = os.path.join(DATA_DIR, "top_players_model.npz")
 
         # Téléchargement
         if os.path.exists(pgn_path):
@@ -80,7 +85,7 @@ def main():
     else:
         username = sys.argv[1].lower()
 
-        pgn_path = f"data/{username}"
+        pgn_path = os.path.join(DATA_DIR, username)
         if year:
             pgn_path += f"_{year}"
         if month:

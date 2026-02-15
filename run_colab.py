@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Script tout-en-un pour Google Colab — lancer depuis le terminal :
-    cd /content && python chess-gpu/run_colab.py
+    cd /content && python chess-gpu/run_colab.py            # phase 1 (MLP)
+    cd /content && python chess-gpu/run_colab.py --phase2   # phase 2 (Transformer)
+    cd /content && python chess-gpu/run_colab.py --all      # les deux
 """
 import os, sys, subprocess
 
@@ -12,6 +14,8 @@ def sh(cmd):
     if r != 0:
         print(f"⚠ Exit code {r}")
     return r
+
+phase = "all" if "--all" in sys.argv else "phase2" if "--phase2" in sys.argv else "phase1"
 
 # ── 0. Stockfish ──
 if not os.path.exists("/usr/games/stockfish"):
@@ -27,20 +31,24 @@ else:
 os.chdir("/content/chess-gpu")
 os.environ["PYTHONUNBUFFERED"] = "1"
 
-# ── 2. Download + Prepare + Train ──
-sh("python src/phase1_mlp/main.py --top10")
+# ── 2. Phase 1 — MLP ──
+if phase in ("phase1", "all"):
+    sh("python src/phase1_mlp/main.py --top10")
+    MODEL1 = "data/top_players_model.npz"
+    if os.path.exists(MODEL1):
+        sh(f"python src/phase1_mlp/evaluate.py {MODEL1} --games 10")
+        sh(f"python src/phase1_mlp/evaluate.py {MODEL1} --games 10 --max-depth 4 --max-nodes 1000")
 
-# ── 3. Évaluations (seulement si modèle existe) ──
-MODEL = "data/top_players_model.npz"
-if os.path.exists(MODEL):
-    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10")
-    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10 --max-depth 4 --max-nodes 1000")
-    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10 --benchmark --max-depth 4 --max-nodes 1000")
+# ── 3. Phase 2 — Transformer ──
+if phase in ("phase2", "all"):
+    sh("python src/phase2_transformer/main.py --top10")
+    MODEL2 = "data/transformer_model.pt"
+    if os.path.exists(MODEL2):
+        sh(f"python src/phase2_transformer/evaluate.py {MODEL2} --games 10")
 
-    # ── 4. Résumé des résultats ──
-    print("\n" + "="*60)
-    print("  📊 Fichiers générés")
-    print("="*60, flush=True)
-    sh("ls -lh data/top_players_model_runs/ 2>/dev/null || echo 'Aucun résultat'")
-else:
-    print(f"\n⚠ Modèle {MODEL} introuvable — entraînement échoué ?")
+# ── 4. Résumé ──
+print("\n" + "="*60)
+print("  📊 Fichiers générés")
+print("="*60, flush=True)
+sh("ls -lh data/top_players_model_runs/ 2>/dev/null || echo 'Aucun résultat MLP'")
+sh("ls -lh data/transformer_model_runs/ 2>/dev/null || echo 'Aucun résultat Transformer'")

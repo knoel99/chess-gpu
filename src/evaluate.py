@@ -276,13 +276,17 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
 def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
               sf_time=0.1, think_time=0, move_callback=None, game_id=0,
               log_file=None):
-    """Joue une partie complète. Retourne (score, pgn_string)."""
+    """Joue une partie complète. Retourne (score, pgn_string, mat_history)."""
     board = chess.Board()
     game = chess.pgn.Game()
     game.headers["White"] = "Réseau de neurones" if model_color == chess.WHITE else "Stockfish"
     game.headers["Black"] = "Stockfish" if model_color == chess.WHITE else "Réseau de neurones"
     node = game
     move_count = 0
+
+    # Historique matériel : [(move_count, diff_pour_reseau, capture_event)]
+    mat_history = []
+    prev_mw, prev_mb, _ = material_detail(board)
 
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
@@ -302,11 +306,34 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
             who = "♟"
             info = None
 
+        # Détecter la pièce capturée et la pièce qui capture AVANT de pousser
+        captured_piece = board.piece_at(move.to_square)
+        moving_piece = board.piece_at(move.from_square)
+        capture_event = None
+
+        if captured_piece and moving_piece:
+            cap_val = PIECE_VALUES.get(captured_piece.piece_type, 0)
+            mov_val = PIECE_VALUES.get(moving_piece.piece_type, 0)
+            # Pion (val=1) qui capture une pièce importante (val>=3)
+            if mov_val == 1 and cap_val >= 3:
+                # Vérifier si c'est "gratuit" (pas un échange immédiat)
+                board.push(move)
+                is_recaptured = board.is_attacked_by(
+                    not moving_piece.color, move.to_square)
+                board.pop()
+                if not is_recaptured:
+                    piece_name = {3: "♞", 5: "♜", 9: "♛"}.get(cap_val, "?")
+                    capture_event = f"🎯 pion capture {piece_name} (+{cap_val})"
+
         board.push(move)
         move_count += 1
 
+        mw, mb, diff = material_detail(board)
+        # Diff du point de vue du réseau
+        nn_diff = diff if model_color == chess.WHITE else -diff
+        mat_history.append((move_count, nn_diff, capture_event, who))
+
         if log_file is not None:
-            mw, mb, diff = material_detail(board)
             move_num = (move_count + 1) // 2
             dot = "." if board.turn == chess.BLACK else "..."
             if info is not None:
@@ -316,14 +343,17 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
                               f"t={info.get('time', 0):.2f}s")
             else:
                 search_str = f"{'stockfish':>34s}"
+            cap_str = f" │ {capture_event}" if capture_event else ""
             with _log_lock:
                 log_file.write(
                     f"G{game_id+1:02d} │ {move_num:3d}{dot}{move.uci():6s} {who} │ "
                     f"mat ⬜{mw:2d} ⬛{mb:2d} Δ{diff:+3d} │ "
                     f"legal={board.legal_moves.count():3d} │ "
-                    f"{search_str}\n"
+                    f"{search_str}{cap_str}\n"
                 )
                 log_file.flush()
+
+        prev_mw, prev_mb = mw, mb
 
         if move_callback:
             move_callback(game_id, move_count, who, move.uci(), board.is_game_over())
@@ -340,7 +370,7 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
     else:
         score = 0.5
 
-    return score, str(game)
+    return score, str(game), mat_history
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -607,12 +637,12 @@ def _play_game_thread(args):
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
-    score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
+    score, pgn, mat_history = play_game(W1, b1, W2, b2, token_to_move, engine,
                            model_color, think_time=think_time,
                            move_callback=None, game_id=game_id,
                            log_file=log_file)
     engine.quit()
-    return score, pgn, model_color
+    return score, pgn, model_color, mat_history
 
 
 def _auto_workers():
@@ -620,6 +650,106 @@ def _auto_workers():
     import os
     cores = os.cpu_count() or 1
     return max(1, min(cores, 8))
+
+
+def generate_material_chart(all_mat_histories, scores, stockfish_elo, out_path):
+    """Génère un graphique de la différence de matériel pour chaque partie."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    n_games = len(all_mat_histories)
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    colors = plt.cm.tab10(np.linspace(0, 1, min(n_games, 10)))
+
+    for idx in sorted(all_mat_histories.keys()):
+        hist = all_mat_histories[idx]
+        if not hist:
+            continue
+        x = [h[0] for h in hist]  # move_count
+        y = [h[1] for h in hist]  # nn_diff
+        color = colors[idx % 10]
+
+        # Résultat de la partie
+        score = scores[idx] if idx < len(scores) else 0.5
+        result_str = "✓" if score == 1.0 else ("½" if score == 0.5 else "✗")
+
+        ax.plot(x, y, color=color, linewidth=1.5, alpha=0.8,
+                label=f"G{idx+1:02d} ({result_str})")
+
+        # Marqueur fin de partie
+        marker = "^" if score == 1.0 else ("s" if score == 0.5 else "v")
+        marker_color = "#2ecc71" if score == 1.0 else ("#f39c12" if score == 0.5 else "#e74c3c")
+        ax.scatter(x[-1], y[-1], marker=marker, s=120, color=marker_color,
+                   edgecolors="white", linewidths=1.5, zorder=5)
+
+        # Marqueurs pour les captures gratuites pion→pièce
+        for mc, diff, cap_event, who in hist:
+            if cap_event:
+                cap_color = "#2ecc71" if who == "🤖" else "#e74c3c"
+                ax.scatter(mc, diff, marker="D", s=80, color=cap_color,
+                           edgecolors="black", linewidths=1, zorder=6)
+                ax.annotate(cap_event.split("capture ")[1] if "capture " in cap_event else "🎯",
+                           (mc, diff), textcoords="offset points",
+                           xytext=(5, 8), fontsize=9, color=cap_color,
+                           fontweight="bold")
+
+    # Ligne zéro
+    ax.axhline(y=0, color="white", linewidth=0.8, alpha=0.5, linestyle="--")
+
+    # Zone de domination
+    ax.axhspan(0, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 5,
+               alpha=0.05, color="#2ecc71")
+    ax.axhspan(ax.get_ylim()[0] if ax.get_ylim()[0] < 0 else -5, 0,
+               alpha=0.05, color="#e74c3c")
+
+    ax.set_xlabel("Coup n°", fontsize=12)
+    ax.set_ylabel("Δ Matériel (+ = réseau domine, − = Stockfish domine)", fontsize=11)
+    ax.set_title(f"Évolution matérielle — Réseau vs Stockfish (Elo ~{stockfish_elo})",
+                 fontsize=14, fontweight="bold")
+
+    # Légende
+    legend_elements = [
+        mpatches.Patch(color="#2ecc71", alpha=0.3, label="Zone réseau domine"),
+        mpatches.Patch(color="#e74c3c", alpha=0.3, label="Zone Stockfish domine"),
+        plt.Line2D([0], [0], marker="^", color="w", markerfacecolor="#2ecc71",
+                   markersize=10, label="Victoire réseau"),
+        plt.Line2D([0], [0], marker="v", color="w", markerfacecolor="#e74c3c",
+                   markersize=10, label="Défaite réseau"),
+        plt.Line2D([0], [0], marker="s", color="w", markerfacecolor="#f39c12",
+                   markersize=10, label="Nulle"),
+        plt.Line2D([0], [0], marker="D", color="w", markerfacecolor="#2ecc71",
+                   markeredgecolor="black", markersize=8,
+                   label="Pion capture pièce (gratuit, réseau)"),
+        plt.Line2D([0], [0], marker="D", color="w", markerfacecolor="#e74c3c",
+                   markeredgecolor="black", markersize=8,
+                   label="Pion capture pièce (gratuit, Stockfish)"),
+    ]
+    ax.legend(handles=legend_elements, loc="lower left", fontsize=9,
+              facecolor="#2a2a3e", edgecolor="#444", labelcolor="white")
+
+    ax.set_facecolor("#1a1a2e")
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.tick_params(colors="white")
+    ax.xaxis.label.set_color("white")
+    ax.yaxis.label.set_color("white")
+    ax.title.set_color("white")
+    for spine in ax.spines.values():
+        spine.set_color("#444")
+
+    ax.legend(handles=legend_elements + [
+        plt.Line2D([0], [0], color=colors[i], linewidth=2,
+                   label=f"G{i+1:02d}")
+        for i in sorted(all_mat_histories.keys())
+    ], loc="lower left", fontsize=8, ncol=2,
+       facecolor="#2a2a3e", edgecolor="#444", labelcolor="white")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"\n  📊 Graphique matériel : {out_path}")
 
 
 def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
@@ -668,6 +798,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     results = {"win": 0, "draw": 0, "loss": 0}
     scores = []
     pgns = []
+    all_mat_histories = {}
 
     if parallel:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -686,8 +817,9 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
             for future in as_completed(futures):
                 idx = futures[future]
-                score, pgn, model_color = future.result()
+                score, pgn, model_color, mat_history = future.result()
                 game_results[idx] = (score, pgn, model_color)
+                all_mat_histories[idx] = mat_history
 
                 if score == 1.0:
                     results["win"] += 1
@@ -738,12 +870,13 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
                 sys.stdout.flush()
 
             print(f"  G{i+1:02d} │ {color_str} │ début", end="")
-            score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
+            score, pgn, mat_history = play_game(W1, b1, W2, b2, token_to_move, engine,
                                    model_color, think_time=think_time,
                                    move_callback=_seq_cb, game_id=i,
                                    log_file=log_file)
             scores.append(score)
             pgns.append(pgn)
+            all_mat_histories[i] = mat_history
 
             if score == 1.0:
                 results["win"] += 1
@@ -760,6 +893,10 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
                   f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L")
 
         engine.quit()
+
+    # Générer le graphique de matériel
+    chart_path = os.path.splitext(model_path)[0] + "_material.png"
+    generate_material_chart(all_mat_histories, scores, stockfish_elo, chart_path)
 
     # Générer le HTML interactif
     html_path = os.path.splitext(model_path)[0] + "_games.html"
@@ -786,6 +923,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     print(f"  Mode           : {mode}")
     print(f"  Workers        : {n_workers}")
     print(f"  Visualisation  : {html_path}")
+    print(f"  Graphique mat. : {chart_path}")
     print(f"  Log recherche  : {log_path}")
     print(f"{'='*60}")
 
@@ -846,7 +984,7 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
                       for i, t in enumerate(tasks)}
             for future in as_completed(futures):
                 idx = futures[future]
-                score, pgn, model_color = future.result()
+                score, pgn, model_color, _ = future.result()
 
                 # Compter les coups depuis le PGN
                 n_moves = pgn.count(".")

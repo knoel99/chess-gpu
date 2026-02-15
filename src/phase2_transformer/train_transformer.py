@@ -194,39 +194,37 @@ def update_plot(history, out_path):
 # 5. Entraînement
 # ---------------------------------------------------------------------------
 
-class ChessSequenceDataset(torch.utils.data.Dataset):
-    """Dataset qui construit les séquences à la volée par slicing.
+def _build_sequence_batch(positions_t, game_start_of, indices, seq_len):
+    """Construit un batch de séquences par indexation vectorisée.
 
-    Stocke les positions plates (N, 846) en RAM (~56 Go),
-    et construit la fenêtre glissante (seq_len, 846) au __getitem__.
-    game_start_of[i] est pré-calculé pour chaque exemple (évite searchsorted).
+    Pour chaque indice i du batch, on prend positions[i-seq_len+1 : i+1],
+    en s'assurant de ne pas déborder avant le début de la partie (padding zéro).
+
+    Tout est fait en PyTorch CPU pour transfert GPU efficace.
     """
+    B = len(indices)
+    D = positions_t.shape[1]
 
-    def __init__(self, positions, y, game_starts, seq_len):
-        self.positions = positions   # (N, D) float32
-        self.y = y                   # (N,) int32
-        self.seq_len = seq_len
-        # Pré-calculer le début de partie pour chaque exemple (O(N) une fois)
-        self.game_start_of = np.empty(len(y), dtype=np.int64)
-        game_indices = np.searchsorted(game_starts, np.arange(len(y)),
-                                       side="right") - 1
-        self.game_start_of[:] = game_starts[game_indices]
+    # Calculer les offsets pour chaque position dans la séquence
+    # offsets[b, s] = indices[b] - (seq_len - 1 - s) = indices[b] - seq_len + 1 + s
+    offsets = indices.unsqueeze(1) - seq_len + 1 + torch.arange(seq_len)  # (B, S)
 
-    def __len__(self):
-        return len(self.y)
+    # Clamp: ne pas descendre en dessous du début de la partie
+    game_starts = game_start_of[indices]  # (B,)
+    floor = game_starts.unsqueeze(1)  # (B, 1)
 
-    def __getitem__(self, idx):
-        game_start = self.game_start_of[idx]
-        n_avail = idx - game_start + 1
+    # Masque: positions avant le début de la partie → padding
+    pad_mask = offsets < floor  # (B, S)
+    offsets = offsets.clamp(min=0)  # éviter index négatif (sera masqué)
 
-        if n_avail >= self.seq_len:
-            seq = self.positions[idx - self.seq_len + 1: idx + 1]
-        else:
-            seq = np.zeros((self.seq_len, self.positions.shape[1]),
-                           dtype=np.float32)
-            seq[self.seq_len - n_avail:] = self.positions[game_start: idx + 1]
+    # Gather : positions_t[offsets] → (B, S, D)
+    flat_idx = offsets.reshape(-1)  # (B*S,)
+    batch = positions_t[flat_idx].reshape(B, seq_len, D)  # (B, S, D)
 
-        return torch.from_numpy(np.ascontiguousarray(seq)), int(self.y[idx])
+    # Zero-out les positions paddées
+    batch[pad_mask] = 0.0
+
+    return batch
 
 
 def train(positions, y, game_starts, n_classes, config,
@@ -254,33 +252,27 @@ def train(positions, y, game_starts, n_classes, config,
     else:
         print(f"  🔴 CPU (pas de GPU)")
 
-    # Dataset + split train/val (90/10)
-    dataset = ChessSequenceDataset(positions, y, game_starts, S)
+    # Pré-calculer game_start pour chaque exemple
+    print(f"  Pré-calcul des indices de parties...", end=" ", flush=True)
+    game_indices = np.searchsorted(game_starts, np.arange(N), side="right") - 1
+    game_start_of = torch.from_numpy(game_starts[game_indices].astype(np.int64))
+    print(f"OK")
 
-    indices = np.random.permutation(N)
+    # Convertir en tensors CPU (partage mémoire avec numpy, pas de copie)
+    positions_t = torch.from_numpy(positions)
+    y_t = torch.from_numpy(y.astype(np.int64))
+    del positions, y
+
+    # Split train/val (90/10)
+    perm = torch.randperm(N)
     split = int(0.9 * N)
-    train_idx = indices[:split]
-    val_idx = indices[split:]
+    train_idx = perm[:split]
+    val_idx = perm[split:]
     n_train = len(train_idx)
     n_val_total = len(val_idx)
 
-    n_cpu = os.cpu_count() or 1
-    n_workers_dl = min(12, n_cpu)
-    train_loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size,
-        sampler=torch.utils.data.SubsetRandomSampler(train_idx),
-        num_workers=n_workers_dl, pin_memory=True,
-        persistent_workers=True, prefetch_factor=4,
-    )
-    val_loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size * 2,
-        sampler=torch.utils.data.SubsetRandomSampler(val_idx),
-        num_workers=n_workers_dl, pin_memory=True,
-        persistent_workers=True, prefetch_factor=4,
-    )
-
-    n_train_batches = len(train_loader)
-    n_val_batches = len(val_loader)
+    n_train_batches = (n_train + batch_size - 1) // batch_size
+    n_val_batches = (n_val_total + batch_size * 2 - 1) // (batch_size * 2)
 
     # Créer le padding mask (positions où toutes les features sont 0)
     def make_padding_mask(X_batch):
@@ -358,9 +350,18 @@ def train(positions, y, game_starts, n_classes, config,
         epoch_loss = 0.0
         n_batches = 0
 
-        for i, (xb, yb) in enumerate(train_loader):
+        # Shuffle des indices de training
+        shuf = train_idx[torch.randperm(n_train)]
+
+        for i in range(n_train_batches):
+            start = i * batch_size
+            end = min(start + batch_size, n_train)
+            idx = shuf[start:end]
+
+            # Construire les séquences (vectorisé CPU) et envoyer au GPU
+            xb = _build_sequence_batch(positions_t, game_start_of, idx, S)
             xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
+            yb = y_t[idx].to(device, non_blocking=True)
 
             pad_mask = make_padding_mask(xb)
 
@@ -407,11 +408,17 @@ def train(positions, y, game_starts, n_classes, config,
         val_top1 = 0.0
         val_top5 = 0.0
         n_val = 0
+        vbs = batch_size * 2
 
         with torch.no_grad():
-            for xb, yb in val_loader:
+            for i in range(n_val_batches):
+                start = i * vbs
+                end = min(start + vbs, n_val_total)
+                idx = val_idx[start:end]
+
+                xb = _build_sequence_batch(positions_t, game_start_of, idx, S)
                 xb = xb.to(device, non_blocking=True)
-                yb = yb.to(device, non_blocking=True)
+                yb = y_t[idx].to(device, non_blocking=True)
 
                 pad_mask = make_padding_mask(xb)
 

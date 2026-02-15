@@ -71,27 +71,32 @@ def build_token_to_move(move_tokens):
     return moves
 
 
+import threading
+
+# Lock pour sérialiser les appels GPU (CuPy n'est pas thread-safe)
+_gpu_lock = threading.Lock()
+
+
 def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
     """Retourne les k meilleurs coups légaux avec leurs probabilités."""
     x = board_to_vector(board)
-    # Détecter le backend depuis le type des poids (numpy ou cupy)
-    _mod = type(W1).__module__.split(".")[0]  # 'numpy' ou 'cupy'
+    _mod = type(W1).__module__.split(".")[0]
     if _mod == "cupy":
         import cupy as _xp
     else:
         _xp = np
-    x_arr = _xp.asarray(x.reshape(1, -1))
 
-    z1 = x_arr @ W1.T + b1
-    a1 = _xp.maximum(z1, 0)
-    logits = a1 @ W2.T + b2
-    logits = logits - logits.max()
-    probs = _xp.exp(logits)
-    probs = probs / probs.sum()
-
-    if hasattr(probs, 'get'):
-        probs = probs.get()
-    probs = probs.flatten()
+    with _gpu_lock:
+        x_arr = _xp.asarray(x.reshape(1, -1))
+        z1 = x_arr @ W1.T + b1
+        a1 = _xp.maximum(z1, 0)
+        logits = a1 @ W2.T + b2
+        logits = logits - logits.max()
+        probs = _xp.exp(logits)
+        probs = probs / probs.sum()
+        if hasattr(probs, 'get'):
+            probs = probs.get()
+        probs = probs.flatten()
 
     legal_moves = set(board.legal_moves)
     sorted_indices = np.argsort(probs)[::-1]
@@ -540,27 +545,16 @@ def find_stockfish():
     return None
 
 
-def _play_game_worker(args):
-    """Worker pour jouer une partie en parallèle (CPU only)."""
-    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, queue = args
-
-    import numpy as _xp
-
-    W1_l = _xp.array(W1)
-    b1_l = _xp.array(b1)
-    W2_l = _xp.array(W2)
-    b2_l = _xp.array(b2)
-
-    def _cb(gid, move_num, who, uci, game_over):
-        if queue is not None:
-            queue.put((gid, move_num, who, uci, game_over))
+def _play_game_thread(args):
+    """Worker thread pour jouer une partie (partage GPU via threads)."""
+    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id = args
 
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
-    score, pgn = play_game(W1_l, b1_l, W2_l, b2_l, token_to_move, engine,
+    score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
                            model_color, think_time=think_time,
-                           move_callback=_cb, game_id=game_id)
+                           move_callback=None, game_id=game_id)
     engine.quit()
     return score, pgn, model_color
 
@@ -592,7 +586,8 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     print(f"  Mode      : {mode}")
     print(f"  Workers   : {n_workers}" + (" (parallèle)" if parallel else " (séquentiel)"))
     print(f"  Backend   : {'GPU (CuPy)' if GPU else 'CPU (NumPy)'}" +
-          (" → workers CPU" if parallel and GPU else ""))
+          (" → threads GPU" if parallel and GPU else
+           " → threads CPU" if parallel else ""))
 
     # Trouver Stockfish
     sf_path = find_stockfish()
@@ -604,33 +599,23 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     print(f"  Stockfish : {sf_path}")
     print(f"{'='*60}\n")
 
-    # Ramener les poids sur CPU pour les workers
-    W1_cpu = W1.get() if GPU else W1
-    b1_cpu = b1.get() if GPU else b1
-    W2_cpu = W2.get() if GPU else W2
-    b2_cpu = b2.get() if GPU else b2
-
     results = {"win": 0, "draw": 0, "loss": 0}
     scores = []
     pgns = []
 
     if parallel:
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        import multiprocessing as mp
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         import sys
-
-        # "spawn" pour éviter que les workers héritent de CuPy (fork + CUDA = crash)
-        ctx = mp.get_context("spawn")
 
         tasks = []
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
-            tasks.append((W1_cpu, b1_cpu, W2_cpu, b2_cpu, token_to_move,
-                         sf_path, stockfish_elo, model_color, think_time, i, None))
+            tasks.append((W1, b1, W2, b2, token_to_move,
+                         sf_path, stockfish_elo, model_color, think_time, i))
 
         game_results = [None] * n_games
-        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
-            futures = {executor.submit(_play_game_worker, t): i
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_play_game_thread, t): i
                       for i, t in enumerate(tasks)}
 
             for future in as_completed(futures):

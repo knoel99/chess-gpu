@@ -197,39 +197,36 @@ def update_plot(history, out_path):
 class ChessSequenceDataset(torch.utils.data.Dataset):
     """Dataset qui construit les séquences à la volée par slicing.
 
-    Stocke les positions plates (N, 846) + game_starts en RAM,
+    Stocke les positions plates (N, 846) en RAM (~56 Go),
     et construit la fenêtre glissante (seq_len, 846) au __getitem__.
-    Mémoire: ~60 Go au lieu de ~960 Go pour les séquences matérialisées.
+    game_start_of[i] est pré-calculé pour chaque exemple (évite searchsorted).
     """
 
     def __init__(self, positions, y, game_starts, seq_len):
         self.positions = positions   # (N, D) float32
         self.y = y                   # (N,) int32
         self.seq_len = seq_len
-        # Pour chaque exemple i, trouver le début de sa partie
-        # game_starts est trié → searchsorted donne l'index de la partie
-        self.game_starts = game_starts
+        # Pré-calculer le début de partie pour chaque exemple (O(N) une fois)
+        self.game_start_of = np.empty(len(y), dtype=np.int64)
+        game_indices = np.searchsorted(game_starts, np.arange(len(y)),
+                                       side="right") - 1
+        self.game_start_of[:] = game_starts[game_indices]
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, idx):
-        # Trouver la partie de cet exemple
-        game_idx = np.searchsorted(self.game_starts, idx, side="right") - 1
-        game_start = self.game_starts[game_idx]
-
-        # Positions disponibles : de game_start à idx (inclus)
+        game_start = self.game_start_of[idx]
         n_avail = idx - game_start + 1
 
         if n_avail >= self.seq_len:
-            seq = self.positions[idx - self.seq_len + 1: idx + 1].copy()
+            seq = self.positions[idx - self.seq_len + 1: idx + 1]
         else:
-            # Padding avec des zéros au début
             seq = np.zeros((self.seq_len, self.positions.shape[1]),
                            dtype=np.float32)
             seq[self.seq_len - n_avail:] = self.positions[game_start: idx + 1]
 
-        return torch.from_numpy(seq), int(self.y[idx])
+        return torch.from_numpy(np.ascontiguousarray(seq)), int(self.y[idx])
 
 
 def train(positions, y, game_starts, n_classes, config,
@@ -257,40 +254,29 @@ def train(positions, y, game_starts, n_classes, config,
     else:
         print(f"  🔴 CPU (pas de GPU)")
 
-    # Split train/val (90/10) — split par parties, pas par exemples
-    n_games = len(game_starts)
-    perm_games = np.random.permutation(n_games)
-    split_g = int(0.9 * n_games)
+    # Dataset + split train/val (90/10)
+    dataset = ChessSequenceDataset(positions, y, game_starts, S)
 
-    # Construire les indices d'exemples pour chaque split
-    game_ends = np.append(game_starts[1:], N)
-    train_idx = np.concatenate([
-        np.arange(game_starts[g], game_ends[g])
-        for g in perm_games[:split_g]
-    ])
-    val_idx = np.concatenate([
-        np.arange(game_starts[g], game_ends[g])
-        for g in perm_games[split_g:]
-    ])
-
+    indices = np.random.permutation(N)
+    split = int(0.9 * N)
+    train_idx = indices[:split]
+    val_idx = indices[split:]
     n_train = len(train_idx)
     n_val_total = len(val_idx)
 
-    # DataLoaders avec construction des séquences à la volée
-    train_ds = ChessSequenceDataset(positions, y, game_starts, S)
-    val_ds = ChessSequenceDataset(positions, y, game_starts, S)
-
-    train_sampler = torch.utils.data.SubsetRandomSampler(train_idx)
-    val_sampler = torch.utils.data.SubsetRandomSampler(val_idx)
-
-    n_workers_dl = min(4, os.cpu_count() or 1)
+    n_cpu = os.cpu_count() or 1
+    n_workers_dl = min(12, n_cpu)
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=batch_size, sampler=train_sampler,
-        num_workers=n_workers_dl, pin_memory=True, persistent_workers=True,
+        dataset, batch_size=batch_size,
+        sampler=torch.utils.data.SubsetRandomSampler(train_idx),
+        num_workers=n_workers_dl, pin_memory=True,
+        persistent_workers=True, prefetch_factor=4,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=batch_size * 2, sampler=val_sampler,
-        num_workers=n_workers_dl, pin_memory=True, persistent_workers=True,
+        dataset, batch_size=batch_size * 2,
+        sampler=torch.utils.data.SubsetRandomSampler(val_idx),
+        num_workers=n_workers_dl, pin_memory=True,
+        persistent_workers=True, prefetch_factor=4,
     )
 
     n_train_batches = len(train_loader)

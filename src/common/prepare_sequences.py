@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Convertit des fichiers PGN en séquences de positions pour le Transformer.
+Convertit des fichiers PGN en données de positions pour le Transformer.
 
-Chaque exemple d'entraînement contient les N dernières positions de la partie,
-permettant au Transformer de capturer le contexte temporel via l'attention.
+Stocke les positions plates (N, 846) avec les limites de parties,
+permettant de construire les séquences à la volée dans le DataLoader
+(évite l'explosion mémoire ×16 des fenêtres glissantes).
 
 Format de sortie :
-  - X : (n_examples, seq_len, n_features)  — séquences de positions
-  - y : (n_examples,)                       — index du coup à prédire
+  - positions : (n_examples, n_features)  — positions enrichies
+  - y         : (n_examples,)             — index du coup à prédire
+  - game_starts : (n_games,)              — indice de début de chaque partie
 
 Usage:
     python prepare_sequences.py data/top_players.pgn data/top_players_seq.npz [--seq-len 16]
@@ -88,16 +90,13 @@ def board_to_vector_enriched(board):
 
 
 # ---------------------------------------------------------------------------
-# 2. Construction des séquences à partir d'une partie
+# 2. Parsing d'une partie en positions plates
 # ---------------------------------------------------------------------------
 
-def _parse_game_sequences(game_text, move_to_idx, seq_len):
-    """Parse une partie PGN et retourne des séquences de positions.
+def _parse_game_enriched(game_text, move_to_idx):
+    """Parse une partie PGN et retourne les positions enrichies + labels.
 
-    Pour chaque coup, on crée une séquence des `seq_len` dernières positions
-    (paddée avec des zéros si la partie est trop courte).
-
-    Retourne (X_seqs, y_list, n_skipped).
+    Retourne (X_list, y_list, n_skipped) — positions plates, pas de séquences.
     """
     try:
         game = chess.pgn.read_game(io.StringIO(game_text))
@@ -112,58 +111,51 @@ def _parse_game_sequences(game_text, move_to_idx, seq_len):
         return [], [], 0
 
     board = game.board()
-    positions = []  # historique des positions encodées
-    X_seqs = []
+    X_list = []
     y_list = []
     n_skipped = 0
 
     for move in game.mainline_moves():
-        # Encoder la position courante
         vec = board_to_vector_enriched(board)
-        positions.append(vec)
-
-        # Token du coup
         token = move_to_token(move, move_to_idx)
         if token is not None:
-            # Construire la séquence (dernières seq_len positions)
-            n_pos = len(positions)
-            if n_pos >= seq_len:
-                seq = np.stack(positions[-seq_len:])
-            else:
-                # Padding avec des zéros au début
-                pad = np.zeros((seq_len - n_pos, N_FEATURES), dtype=np.float32)
-                seq = np.vstack([pad, np.stack(positions)])
-            X_seqs.append(seq)
+            X_list.append(vec)
             y_list.append(token)
         else:
             n_skipped += 1
-
         board.push(move)
 
-    return X_seqs, y_list, n_skipped
+    return X_list, y_list, n_skipped
 
 
-def _parse_batch_sequences(args):
-    """Parse un batch de parties en séquences. Module-level pour ProcessPoolExecutor."""
-    batch, move_to_idx, seq_len = args
-    bx, by, bs = [], [], 0
+def _parse_batch_enriched(args):
+    """Parse un batch de parties en positions plates.
+    Module-level pour ProcessPoolExecutor."""
+    batch, move_to_idx = args
+    all_x, all_y = [], []
+    game_lengths = []
+    n_skipped = 0
     for text in batch:
-        xl, yl, sk = _parse_game_sequences(text, move_to_idx, seq_len)
-        bx.extend(xl)
-        by.extend(yl)
-        bs += sk
-    return bx, by, len(batch), bs
+        xl, yl, sk = _parse_game_enriched(text, move_to_idx)
+        if yl:
+            all_x.extend(xl)
+            all_y.extend(yl)
+            game_lengths.append(len(yl))
+        n_skipped += sk
+    return all_x, all_y, game_lengths, len(batch), n_skipped
 
 
 # ---------------------------------------------------------------------------
-# 3. Parsing PGN complet en séquences
+# 3. Parsing PGN complet
 # ---------------------------------------------------------------------------
 
-def parse_pgn_sequences(pgn_path, move_to_idx, seq_len=16):
-    """Parse un fichier PGN et retourne (X, y) avec X en séquences.
+def parse_pgn_positions(pgn_path, move_to_idx):
+    """Parse un fichier PGN et retourne positions plates + game_starts.
 
-    X shape: (n_examples, seq_len, N_FEATURES)
-    y shape: (n_examples,)
+    Retourne (X, y, game_starts, n_games, n_skipped).
+      X : (N, 846) float32
+      y : (N,) int32
+      game_starts : (n_valid_games,) int64 — indice de début de chaque partie
     """
     import time as _time
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -175,27 +167,27 @@ def parse_pgn_sequences(pgn_path, move_to_idx, seq_len=16):
     print(f"{n_total} parties trouvées ({_time.time()-t0:.1f}s)")
 
     n_workers = max(1, min(os.cpu_count() or 1, 8))
-    print(f"  Parsing séquences (seq_len={seq_len}) avec {n_workers} workers...",
-          flush=True)
+    batch_size = max(100, n_total // (n_workers * 4))
+    batches = [game_texts[i:i+batch_size] for i in range(0, n_total, batch_size)]
+    print(f"  Parsing positions avec {n_workers} workers...", flush=True)
 
     X_list = []
     y_list = []
+    game_lengths = []
     n_games = 0
     n_skipped_moves = 0
 
-    batch_size = max(100, n_total // (n_workers * 4))
-    batches = [game_texts[i:i+batch_size] for i in range(0, n_total, batch_size)]
-
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = {
-            pool.submit(_parse_batch_sequences, (b, move_to_idx, seq_len)): i
+            pool.submit(_parse_batch_enriched, (b, move_to_idx)): i
             for i, b in enumerate(batches)
         }
         done = 0
         for future in as_completed(futures):
-            bx, by, ng, sk = future.result()
+            bx, by, gl, ng, sk = future.result()
             X_list.extend(bx)
             y_list.extend(by)
+            game_lengths.extend(gl)
             n_games += ng
             n_skipped_moves += sk
             done += 1
@@ -207,8 +199,13 @@ def parse_pgn_sequences(pgn_path, move_to_idx, seq_len=16):
 
     X = np.array(X_list, dtype=np.float32)
     y = np.array(y_list, dtype=np.int32)
+    game_starts = np.zeros(len(game_lengths), dtype=np.int64)
+    cumsum = 0
+    for i, gl in enumerate(game_lengths):
+        game_starts[i] = cumsum
+        cumsum += gl
 
-    return X, y, n_games, n_skipped_moves
+    return X, y, game_starts, n_games, n_skipped_moves
 
 
 # ---------------------------------------------------------------------------
@@ -216,15 +213,17 @@ def parse_pgn_sequences(pgn_path, move_to_idx, seq_len=16):
 # ---------------------------------------------------------------------------
 
 def run(pgn_path, out_path, seq_len=16):
-    """Convertit un PGN en données séquentielles .npz."""
+    """Convertit un PGN en données de positions .npz."""
     print(f"Construction du dictionnaire de coups...")
     move_to_idx, idx_to_move = build_move_dict()
     print(f"  → {len(move_to_idx)} tokens")
 
-    print(f"Parsing de {pgn_path} (séquences de {seq_len})...")
-    X, y, n_games, n_skipped = parse_pgn_sequences(pgn_path, move_to_idx, seq_len)
-    print(f"  → {n_games} parties, {len(y)} exemples, {n_skipped} coups ignorés")
+    print(f"Parsing de {pgn_path}...")
+    X, y, game_starts, n_games, n_skipped = parse_pgn_positions(
+        pgn_path, move_to_idx)
+    print(f"  → {n_games} parties, {len(y):,} exemples, {n_skipped} coups ignorés")
     print(f"  → X shape: {X.shape}, y shape: {y.shape}")
+    print(f"  → {len(game_starts)} parties avec coups valides")
 
     move_tokens = np.array(
         [(f, t, p if p else 0) for (f, t, p) in
@@ -232,7 +231,9 @@ def run(pgn_path, out_path, seq_len=16):
         dtype=np.int32
     )
 
-    np.savez_compressed(out_path, X=X, y=y, move_tokens=move_tokens,
+    np.savez_compressed(out_path, positions=X, y=y,
+                        game_starts=game_starts,
+                        move_tokens=move_tokens,
                         seq_len=seq_len, n_features=N_FEATURES)
     print(f"  → Sauvegardé dans {out_path}")
 

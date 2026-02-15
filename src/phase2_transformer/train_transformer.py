@@ -194,9 +194,50 @@ def update_plot(history, out_path):
 # 5. Entraînement
 # ---------------------------------------------------------------------------
 
-def train(X, y, n_classes, config, plot_path="data/transformer_curves.png"):
+class ChessSequenceDataset(torch.utils.data.Dataset):
+    """Dataset qui construit les séquences à la volée par slicing.
+
+    Stocke les positions plates (N, 846) + game_starts en RAM,
+    et construit la fenêtre glissante (seq_len, 846) au __getitem__.
+    Mémoire: ~60 Go au lieu de ~960 Go pour les séquences matérialisées.
+    """
+
+    def __init__(self, positions, y, game_starts, seq_len):
+        self.positions = positions   # (N, D) float32
+        self.y = y                   # (N,) int32
+        self.seq_len = seq_len
+        # Pour chaque exemple i, trouver le début de sa partie
+        # game_starts est trié → searchsorted donne l'index de la partie
+        self.game_starts = game_starts
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        # Trouver la partie de cet exemple
+        game_idx = np.searchsorted(self.game_starts, idx, side="right") - 1
+        game_start = self.game_starts[game_idx]
+
+        # Positions disponibles : de game_start à idx (inclus)
+        n_avail = idx - game_start + 1
+
+        if n_avail >= self.seq_len:
+            seq = self.positions[idx - self.seq_len + 1: idx + 1].copy()
+        else:
+            # Padding avec des zéros au début
+            seq = np.zeros((self.seq_len, self.positions.shape[1]),
+                           dtype=np.float32)
+            seq[self.seq_len - n_avail:] = self.positions[game_start: idx + 1]
+
+        return torch.from_numpy(seq), int(self.y[idx])
+
+
+def train(positions, y, game_starts, n_classes, config,
+          plot_path="data/transformer_curves.png"):
     """Boucle d'entraînement du Transformer."""
-    N, S, D = X.shape
+    N = len(y)
+    S = config["seq_len"]
+    D = config["n_features"]
     d_model = config.get("d_model", 256)
     nhead = config.get("nhead", 8)
     num_layers = config.get("num_layers", 4)
@@ -216,38 +257,44 @@ def train(X, y, n_classes, config, plot_path="data/transformer_curves.png"):
     else:
         print(f"  🔴 CPU (pas de GPU)")
 
-    # Split train/val (90/10)
-    indices = np.random.permutation(N)
-    split = int(0.9 * N)
-    X_train, X_val = X[indices[:split]], X[indices[split:]]
-    y_train, y_val = y[indices[:split]], y[indices[split:]]
+    # Split train/val (90/10) — split par parties, pas par exemples
+    n_games = len(game_starts)
+    perm_games = np.random.permutation(n_games)
+    split_g = int(0.9 * n_games)
 
-    # Charger sur GPU si assez de VRAM
-    # Séquences : N × S × D × 4 bytes (float32) — plus gros que phase 1
-    data_bytes = (X_train.nbytes + X_val.nbytes) + (y_train.nbytes + y_val.nbytes)
-    use_gpu_data = (device.type == "cuda" and
-                    data_bytes < torch.cuda.get_device_properties(0).total_memory * 0.6)
+    # Construire les indices d'exemples pour chaque split
+    game_ends = np.append(game_starts[1:], N)
+    train_idx = np.concatenate([
+        np.arange(game_starts[g], game_ends[g])
+        for g in perm_games[:split_g]
+    ])
+    val_idx = np.concatenate([
+        np.arange(game_starts[g], game_ends[g])
+        for g in perm_games[split_g:]
+    ])
 
-    n_train = len(y_train)
-    n_val_total = len(y_val)
+    n_train = len(train_idx)
+    n_val_total = len(val_idx)
 
-    if use_gpu_data:
-        print(f"  ⚡ Chargement complet sur GPU ({data_bytes / 1024**3:.1f} Go)")
-        X_train_t = torch.from_numpy(X_train).to(device)
-        y_train_t = torch.from_numpy(y_train).long().to(device)
-        X_val_t = torch.from_numpy(X_val).to(device)
-        y_val_t = torch.from_numpy(y_val).long().to(device)
-        del X_train, X_val, y_train, y_val
-    else:
-        print(f"  📦 DataLoader CPU→GPU ({data_bytes / 1024**3:.1f} Go)")
-        X_train_t = torch.from_numpy(X_train)
-        y_train_t = torch.from_numpy(y_train).long()
-        X_val_t = torch.from_numpy(X_val)
-        y_val_t = torch.from_numpy(y_val).long()
-        del X_train, X_val, y_train, y_val
+    # DataLoaders avec construction des séquences à la volée
+    train_ds = ChessSequenceDataset(positions, y, game_starts, S)
+    val_ds = ChessSequenceDataset(positions, y, game_starts, S)
 
-    n_train_batches = (n_train + batch_size - 1) // batch_size
-    n_val_batches = (n_val_total + batch_size * 2 - 1) // (batch_size * 2)
+    train_sampler = torch.utils.data.SubsetRandomSampler(train_idx)
+    val_sampler = torch.utils.data.SubsetRandomSampler(val_idx)
+
+    n_workers_dl = min(4, os.cpu_count() or 1)
+    train_loader = torch.utils.data.DataLoader(
+        train_ds, batch_size=batch_size, sampler=train_sampler,
+        num_workers=n_workers_dl, pin_memory=True, persistent_workers=True,
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_ds, batch_size=batch_size * 2, sampler=val_sampler,
+        num_workers=n_workers_dl, pin_memory=True, persistent_workers=True,
+    )
+
+    n_train_batches = len(train_loader)
+    n_val_batches = len(val_loader)
 
     # Créer le padding mask (positions où toutes les features sont 0)
     def make_padding_mask(X_batch):
@@ -325,22 +372,9 @@ def train(X, y, n_classes, config, plot_path="data/transformer_curves.png"):
         epoch_loss = 0.0
         n_batches = 0
 
-        if use_gpu_data:
-            perm = torch.randperm(n_train, device=device)
-        else:
-            perm = torch.randperm(n_train)
-
-        for i in range(n_train_batches):
-            start = i * batch_size
-            end = min(start + batch_size, n_train)
-            idx = perm[start:end]
-
-            if use_gpu_data:
-                xb = X_train_t[idx]
-                yb = y_train_t[idx]
-            else:
-                xb = X_train_t[idx].to(device, non_blocking=True)
-                yb = y_train_t[idx].to(device, non_blocking=True)
+        for i, (xb, yb) in enumerate(train_loader):
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
 
             pad_mask = make_padding_mask(xb)
 
@@ -389,16 +423,9 @@ def train(X, y, n_classes, config, plot_path="data/transformer_curves.png"):
         n_val = 0
 
         with torch.no_grad():
-            vbs = batch_size * 2
-            for i in range(n_val_batches):
-                start = i * vbs
-                end = min(start + vbs, n_val_total)
-                if use_gpu_data:
-                    xb = X_val_t[start:end]
-                    yb = y_val_t[start:end]
-                else:
-                    xb = X_val_t[start:end].to(device, non_blocking=True)
-                    yb = y_val_t[start:end].to(device, non_blocking=True)
+            for xb, yb in val_loader:
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
 
                 pad_mask = make_padding_mask(xb)
 
@@ -500,21 +527,24 @@ def run(data_path, model_path="data/transformer_model.pt"):
     """Lance l'entraînement du Transformer."""
     print(f"Chargement de {data_path}...")
     data = np.load(data_path)
-    X = data["X"]
+    positions = data["positions"]
     y = data["y"]
+    game_starts = data["game_starts"]
     move_tokens = data["move_tokens"]
     seq_len = int(data["seq_len"])
     n_features = int(data["n_features"])
 
     n_classes = len(move_tokens)
-    print(f"  → {X.shape[0]:,} exemples, séquence={seq_len}×{n_features}, "
+    print(f"  → {len(y):,} exemples, {len(game_starts):,} parties")
+    print(f"  → positions {positions.shape}, séquence={seq_len}×{n_features}, "
           f"{n_classes} classes")
+    print(f"  → RAM positions: {positions.nbytes / 1024**3:.1f} Go")
 
-    # Auto-tune batch_size
+    # Auto-tune batch_size pour maximiser l'utilisation GPU
     if torch.cuda.is_available():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         if vram_gb >= 40:
-            bs = 2048
+            bs = 4096
         elif vram_gb >= 16:
             bs = 1024
         elif vram_gb >= 8:
@@ -540,7 +570,8 @@ def run(data_path, model_path="data/transformer_model.pt"):
     }
 
     plot_path = os.path.splitext(model_path)[0] + "_curves.png"
-    model, history = train(X, y, n_classes, config, plot_path=plot_path)
+    model, history = train(positions, y, game_starts, n_classes, config,
+                           plot_path=plot_path)
 
     export_model(model, move_tokens, config, model_path)
     return model_path

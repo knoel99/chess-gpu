@@ -182,7 +182,7 @@ def run_multi(players=None, year=None, month=None, out_path=None):
             path = run(player, year=year, month=month)
             if path:
                 all_paths.append(path)
-        except Exception as e:
+        except (Exception, SystemExit) as e:
             print(f"  ⚠ Erreur pour {player}: {e}")
 
     # Fusionner tous les PGN

@@ -185,15 +185,19 @@ def material_detail(board):
 
 
 def search(board, weights, token_to_move, model_color,
-           depth, deadline, top_k=5, stats=None):
+           depth, alpha, beta, max_nodes, prob_cutoff=0.1,
+           top_k=5, stats=None):
     """
-    Recherche arborescente avec le réseau de neurones.
-    Combine la probabilité du réseau et l'évaluation matérielle.
+    Alpha-beta search avec élagage par probabilité du réseau.
+    
+    - alpha/beta : fenêtre alpha-beta classique
+    - max_nodes : budget global (partagé via stats["nodes"])
+    - prob_cutoff : ratio min vs meilleur candidat (ex: 0.1 = ignore < 10% du best)
+    
     Retourne (score, meilleur_coup).
     """
-    import time as _time
-
-    if _time.time() > deadline:
+    # Budget nœuds épuisé
+    if stats is not None and stats["nodes"] >= max_nodes:
         return evaluate_position(board, model_color), None
 
     if board.is_game_over():
@@ -216,20 +220,26 @@ def search(board, weights, token_to_move, model_color,
     if not candidates:
         return evaluate_position(board, model_color), None
 
+    # Élagage par seuil de probabilité
+    best_prob = candidates[0][1]
+    if best_prob > 0:
+        candidates = [(m, p) for m, p in candidates if p >= best_prob * prob_cutoff]
+
     is_model_turn = (board.turn == model_color)
     best_score = -99999 if is_model_turn else 99999
     best_move = candidates[0][0]
 
     for move, prob in candidates:
-        if _time.time() > deadline:
+        if stats is not None and stats["nodes"] >= max_nodes:
             break
 
         board.push(move)
         child_score, _ = search(
             board, weights, token_to_move, model_color,
-            depth - 1, deadline, top_k=max(3, top_k - 1), stats=stats
+            depth - 1, alpha, beta, max_nodes,
+            prob_cutoff=prob_cutoff,
+            top_k=max(3, top_k - 1), stats=stats
         )
-        # Bonus pour les coups à haute probabilité du réseau
         child_score += prob * 2 if is_model_turn else -prob * 2
         board.pop()
 
@@ -237,10 +247,16 @@ def search(board, weights, token_to_move, model_color,
             if child_score > best_score:
                 best_score = child_score
                 best_move = move
+            alpha = max(alpha, best_score)
         else:
             if child_score < best_score:
                 best_score = child_score
                 best_move = move
+            beta = min(beta, best_score)
+
+        # Alpha-beta cutoff
+        if alpha >= beta:
+            break
 
     return best_score, best_move
 
@@ -257,11 +273,14 @@ def evaluate_position(board, model_color):
     return mat + mobility
 
 
-def predict_move(board, weights, token_to_move, think_time=0):
-    """Prédit le meilleur coup. Retourne (move, info_dict)."""
+def predict_move(board, weights, token_to_move, max_depth=0, max_nodes=0):
+    """Prédit le meilleur coup. Retourne (move, info_dict).
+    
+    max_depth=0 et max_nodes=0 → mode instantané (top-1 du réseau).
+    """
     legal_count = board.legal_moves.count()
 
-    if think_time <= 0:
+    if max_depth <= 0 or max_nodes <= 0:
         top = get_top_moves(board, weights, token_to_move, k=1)
         if top:
             info = {"depth": 0, "nodes": 1, "forward_passes": 1,
@@ -273,7 +292,7 @@ def predict_move(board, weights, token_to_move, think_time=0):
         return random.choice(list(board.legal_moves)), info
 
     import time as _time
-    deadline = _time.time() + think_time
+    t0 = _time.time()
 
     best_move = None
     best_score = -99999
@@ -281,17 +300,20 @@ def predict_move(board, weights, token_to_move, think_time=0):
     depth_reached = 0
     total_stats = {"nodes": 0, "forward_passes": 0}
 
-    for depth in range(1, 20):
-        if _time.time() > deadline:
+    # Iterative deepening jusqu'à max_depth, budget global max_nodes
+    for depth in range(1, max_depth + 1):
+        if total_stats["nodes"] >= max_nodes:
             break
 
-        depth_stats = {"nodes": 0, "forward_passes": 0}
+        depth_stats = {"nodes": total_stats["nodes"],
+                       "forward_passes": total_stats["forward_passes"]}
         score, move = search(
             board, weights, token_to_move, model_color,
-            depth, deadline, top_k=7, stats=depth_stats
+            depth, -99999, 99999, max_nodes,
+            top_k=7, stats=depth_stats
         )
-        total_stats["nodes"] += depth_stats["nodes"]
-        total_stats["forward_passes"] += depth_stats["forward_passes"]
+        total_stats["nodes"] = depth_stats["nodes"]
+        total_stats["forward_passes"] = depth_stats["forward_passes"]
 
         if move is not None:
             best_move = move
@@ -303,7 +325,7 @@ def predict_move(board, weights, token_to_move, think_time=0):
         best_move = top[0][0] if top else list(board.legal_moves)[0]
         total_stats["forward_passes"] += 1
 
-    elapsed = think_time - max(0, deadline - _time.time()) if think_time > 0 else 0
+    elapsed = _time.time() - t0
     info = {"depth": depth_reached, "nodes": total_stats["nodes"],
             "forward_passes": total_stats["forward_passes"],
             "legal_moves": legal_count, "score": best_score,
@@ -314,8 +336,8 @@ def predict_move(board, weights, token_to_move, think_time=0):
 # ── Partie ──────────────────────────────────────────────────────────────────
 
 def play_game(weights, token_to_move, engine, model_color,
-              sf_time=0.1, think_time=0, move_callback=None, game_id=0,
-              log_file=None):
+              sf_time=0.1, max_depth=0, max_nodes=0,
+              move_callback=None, game_id=0, log_file=None):
     """Joue une partie complète. Retourne (score, pgn_string, mat_history)."""
     board = chess.Board()
     game = chess.pgn.Game()
@@ -331,7 +353,7 @@ def play_game(weights, token_to_move, engine, model_color,
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
             move, info = predict_move(board, weights, token_to_move,
-                                      think_time=think_time)
+                                      max_depth=max_depth, max_nodes=max_nodes)
             node = node.add_variation(move)
             comment = (f"d={info['depth']} n={info['nodes']} "
                        f"fw={info['forward_passes']} legal={info['legal_moves']}")
@@ -672,13 +694,14 @@ def find_stockfish():
 
 def _play_game_thread(args):
     """Worker thread pour jouer une partie (partage GPU via threads)."""
-    weights, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, log_file = args
+    weights, token_to_move, sf_path, sf_elo, model_color, max_depth, max_nodes, game_id, log_file = args
 
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
     score, pgn, mat_history = play_game(weights, token_to_move, engine,
-                           model_color, think_time=think_time,
+                           model_color, max_depth=max_depth,
+                           max_nodes=max_nodes,
                            move_callback=None, game_id=game_id,
                            log_file=log_file)
     engine.quit()
@@ -792,9 +815,12 @@ def generate_material_chart(all_mat_histories, scores, stockfish_elo, out_path):
     print(f"\n  📊 Graphique matériel : {out_path}")
 
 
-def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
+def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_workers=0):
     """Lance l'évaluation contre Stockfish."""
-    mode = "instantané" if think_time <= 0 else f"recherche {think_time}s/coup"
+    if max_depth > 0 and max_nodes > 0:
+        mode = f"recherche d={max_depth} n={max_nodes}"
+    else:
+        mode = "instantané"
     if n_workers <= 0:
         n_workers = _auto_workers()
     parallel = n_workers > 1
@@ -856,7 +882,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
             tasks.append((weights, token_to_move,
-                         sf_path, stockfish_elo, model_color, think_time, i, log_file))
+                         sf_path, stockfish_elo, model_color, max_depth, max_nodes, i, log_file))
 
         game_results = [None] * n_games
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
@@ -919,7 +945,8 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
             print(f"  G{i+1:02d} │ {color_str} │ début", end="")
             score, pgn, mat_history = play_game(weights, token_to_move, engine,
-                                   model_color, think_time=think_time,
+                                   model_color, max_depth=max_depth,
+                                   max_nodes=max_nodes,
                                    move_callback=_seq_cb, game_id=i,
                                    log_file=log_file)
             scores.append(score)
@@ -983,7 +1010,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     log_file.close()
 
 
-def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_workers=0):
+def benchmark(model_path, n_games=10, stockfish_elo=1350, max_depth=4, max_nodes=1000, n_workers=0):
     """Compare le mode instantané vs tree search sur les mêmes parties."""
     import math
 
@@ -996,7 +1023,7 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
     print(f"  Modèle     : {model_path}")
     print(f"  Parties    : {n_games}")
     print(f"  Stockfish  : Elo ~{stockfish_elo}")
-    print(f"  Think-time : {think_time}s/coup (pour mode recherche)")
+    print(f"  Recherche  : depth={max_depth} nodes={max_nodes}")
     print(f"  Workers    : {n_workers}")
     print(f"{'='*60}\n")
 
@@ -1009,14 +1036,13 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
         sys.exit(1)
 
     modes = [
-        ("instantané", 0),
-        (f"recherche {think_time}s", think_time),
+        ("instantané", 0, 0),
+        (f"recherche d={max_depth} n={max_nodes}", max_depth, max_nodes),
     ]
 
-    for mode_name, tt in modes:
+    for mode_name, md, mn in modes:
         print(f"\n  ── Mode : {mode_name} {'─'*40}")
         results = {"win": 0, "draw": 0, "loss": 0}
-        total_moves = 0
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1024,7 +1050,7 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
             tasks.append((weights, token_to_move,
-                         sf_path, stockfish_elo, model_color, tt, i, None))
+                         sf_path, stockfish_elo, model_color, md, mn, i, None))
 
         game_lengths = []
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
@@ -1077,15 +1103,16 @@ def main():
     parser.add_argument("model", help="Chemin vers le modèle .npz")
     parser.add_argument("--games", type=int, default=10, help="Nombre de parties (défaut: 10)")
     parser.add_argument("--stockfish-elo", type=int, default=1350, help="Elo de Stockfish (défaut: 1350, min: 1350)")
-    parser.add_argument("--think-time", type=float, default=0, help="Temps de réflexion en secondes par coup (défaut: 0 = instantané)")
+    parser.add_argument("--max-depth", type=int, default=0, help="Profondeur max de recherche (défaut: 0 = instantané)")
+    parser.add_argument("--max-nodes", type=int, default=0, help="Budget total de nœuds (défaut: 0 = instantané)")
     parser.add_argument("--workers", type=int, default=0, help="Nombre de workers (défaut: 0 = auto-détection CPU cores)")
     parser.add_argument("--benchmark", action="store_true", help="Compare instantané vs tree search")
     args = parser.parse_args()
     if args.benchmark:
         benchmark(args.model, args.games, args.stockfish_elo,
-                  args.think_time or 1.0, args.workers)
+                  args.max_depth or 4, args.max_nodes or 1000, args.workers)
     else:
-        run(args.model, args.games, args.stockfish_elo, args.think_time, args.workers)
+        run(args.model, args.games, args.stockfish_elo, args.max_depth, args.max_nodes, args.workers)
 
 
 if __name__ == "__main__":

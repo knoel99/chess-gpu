@@ -616,80 +616,52 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
     if parallel:
         from concurrent.futures import ProcessPoolExecutor, as_completed
-        from multiprocessing import Manager
         import sys
-
-        manager = Manager()
-        queue = manager.Queue()
 
         tasks = []
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
             tasks.append((W1_cpu, b1_cpu, W2_cpu, b2_cpu, token_to_move,
-                         sf_path, stockfish_elo, model_color, think_time, i, queue))
-
-        # État d'affichage par partie
-        game_moves = {i: [] for i in range(n_games)}
-        game_done = set()
+                         sf_path, stockfish_elo, model_color, think_time, i, None))
 
         game_results = [None] * n_games
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = {executor.submit(_play_game_worker, t): i
                       for i, t in enumerate(tasks)}
 
-            import time as _tm
+            for future in as_completed(futures):
+                idx = futures[future]
+                score, pgn, model_color = future.result()
+                game_results[idx] = (score, pgn, model_color)
 
-            while len(game_done) < n_games:
-                # Drainer la queue de coups
-                drained = False
-                while not queue.empty():
-                    try:
-                        gid, move_num, who, uci, game_over = queue.get_nowait()
-                        game_moves[gid].append(f"{who}{uci}")
-                        drained = True
-                    except Exception:
+                if score == 1.0:
+                    results["win"] += 1
+                    symbol = "✅"
+                elif score == 0.0:
+                    results["loss"] += 1
+                    symbol = "❌"
+                else:
+                    results["draw"] += 1
+                    symbol = "🤝"
+
+                color = "⬜ Blancs" if model_color == chess.WHITE else "⬛ Noirs"
+                done_count = results["win"] + results["draw"] + results["loss"]
+                total_score = results["win"] + results["draw"] * 0.5
+                wr = total_score / done_count * 100
+
+                # Extraire les derniers coups du PGN
+                moves_line = ""
+                for line in pgn.split("\n"):
+                    if line and not line.startswith("["):
+                        moves_line = line.strip()
                         break
+                last_moves = " ".join(moves_line.split()[-12:]) if moves_line else ""
 
-                if drained:
-                    # Afficher l'état de toutes les parties
-                    lines = []
-                    for gi in range(n_games):
-                        moves_str = " ".join(game_moves[gi][-8:])  # 8 derniers coups
-                        n_m = len(game_moves[gi])
-                        status = "✓" if gi in game_done else f"coup {n_m:3d}"
-                        color = "⬜" if gi % 2 == 0 else "⬛"
-                        lines.append(f"  {color} G{gi+1:02d} │ {status} │ {moves_str}")
-                    print("\033[2J\033[H")  # clear screen
-                    print(f"  ♟  Parties en cours ({len(game_done)}/{n_games} terminées)\n")
-                    for l in lines:
-                        print(l)
-                    sys.stdout.flush()
-
-                # Vérifier les futures terminées (non bloquant)
-                done_futures = [f for f in futures if f.done() and futures[f] not in game_done]
-                for future in done_futures:
-                    idx = futures[future]
-                    score, pgn, model_color = future.result()
-                    game_results[idx] = (score, pgn, model_color)
-                    game_done.add(idx)
-
-                    if score == 1.0:
-                        results["win"] += 1
-                    elif score == 0.0:
-                        results["loss"] += 1
-                    else:
-                        results["draw"] += 1
-
-                _tm.sleep(0.2)
-
-            # Affichage final
-            print(f"\n  ✅ Toutes les parties terminées")
-            for idx in range(n_games):
-                score, _, mc = game_results[idx]
-                symbol = "✅" if score == 1.0 else ("❌" if score == 0.0 else "🤝")
-                color = "⬜ Blancs" if mc == chess.WHITE else "⬛ Noirs"
-                n_m = len(game_moves[idx])
-                print(f"  G{idx+1:02d} │ {color} │ {symbol} │ {n_m} coups")
+                print(f"  G{idx+1:02d} │ {color} │ {symbol} │ "
+                      f"{done_count}/{n_games} │ {results['win']}W-{results['draw']}D-{results['loss']}L │ "
+                      f"WR {wr:.0f}%")
+                print(f"       └─ {last_moves}")
+                sys.stdout.flush()
 
         for score, pgn, _ in game_results:
             scores.append(score)

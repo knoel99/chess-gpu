@@ -192,13 +192,13 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
 
     if use_gpu_data:
         print(f"  ⚡ Chargement complet sur GPU ({data_bytes / 1024**3:.1f} Go)")
+        n_train = len(y_train)
+        n_val_total = len(y_val)
         X_train_t = torch.from_numpy(X_train).float().to(device)
         y_train_t = torch.from_numpy(y_train).long().to(device)
         X_val_t = torch.from_numpy(X_val).float().to(device)
         y_val_t = torch.from_numpy(y_val).long().to(device)
         del X_train, X_val, y_train, y_val
-        n_train = X_train_t.shape[0]
-        n_val_total = X_val_t.shape[0]
         n_train_batches = (n_train + batch_size - 1) // batch_size
         n_val_batches = (n_val_total + batch_size * 2 - 1) // (batch_size * 2)
         train_loader = None
@@ -248,11 +248,14 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         arch_str += f" → {h} (BN+ReLU+Drop)"
     arch_str += f" → {n_classes}"
 
+    n_train_display = n_train if use_gpu_data else len(train_ds)
+    n_val_display = n_val_total if use_gpu_data else len(val_ds)
+
     print(f"\n{'='*70}")
     print(f"  ♟  Entraînement PyTorch ({len(hidden)+1} couches)")
     print(f"{'='*70}")
-    print(f"  Exemples train : {len(y_train):,}")
-    print(f"  Exemples val   : {len(y_val):,}")
+    print(f"  Exemples train : {n_train_display:,}")
+    print(f"  Exemples val   : {n_val_display:,}")
     print(f"  Architecture   : {arch_str}")
     print(f"  Paramètres     : {n_params:,} ({n_params*4/1024/1024:.1f} Mo)")
     print(f"  Optimizer      : Adam (lr={lr}, wd=1e-5)")

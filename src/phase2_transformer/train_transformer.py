@@ -205,21 +205,17 @@ def _build_sequence_batch(positions_t, game_start_of, indices, seq_len):
     B = len(indices)
     D = positions_t.shape[1]
 
-    # Calculer les offsets pour chaque position dans la séquence
-    # offsets[b, s] = indices[b] - (seq_len - 1 - s) = indices[b] - seq_len + 1 + s
+    # offsets[b, s] = indices[b] - seq_len + 1 + s
     offsets = indices.unsqueeze(1) - seq_len + 1 + torch.arange(seq_len)  # (B, S)
 
-    # Clamp: ne pas descendre en dessous du début de la partie
     game_starts = game_start_of[indices]  # (B,)
     floor = game_starts.unsqueeze(1)  # (B, 1)
 
-    # Masque: positions avant le début de la partie → padding
     pad_mask = offsets < floor  # (B, S)
-    offsets = offsets.clamp(min=0)  # éviter index négatif (sera masqué)
+    offsets = offsets.clamp(min=0)
 
     # Gather : positions_t[offsets] → (B, S, D)
-    flat_idx = offsets.reshape(-1)  # (B*S,)
-    batch = positions_t[flat_idx].reshape(B, seq_len, D)  # (B, S, D)
+    batch = positions_t[offsets.reshape(-1)].reshape(B, seq_len, D)
 
     # Zero-out les positions paddées
     batch[pad_mask] = 0.0
@@ -227,9 +223,19 @@ def _build_sequence_batch(positions_t, game_start_of, indices, seq_len):
     return batch
 
 
+def _prefetch_batch(positions_t, game_start_of, y_t, indices, seq_len, device):
+    """Construit et transfère un batch en pinned memory pour async GPU copy."""
+    xb = _build_sequence_batch(positions_t, game_start_of, indices, seq_len)
+    yb = y_t[indices]
+    # .pin_memory() → async .to(device, non_blocking=True) sera instantané
+    return xb.pin_memory(), yb.pin_memory()
+
+
 def train(positions, y, game_starts, n_classes, config,
           plot_path="data/transformer_curves.png"):
     """Boucle d'entraînement du Transformer."""
+    from concurrent.futures import ThreadPoolExecutor
+
     N = len(y)
     S = config["seq_len"]
     D = config["n_features"]
@@ -353,15 +359,30 @@ def train(positions, y, game_starts, n_classes, config,
         # Shuffle des indices de training
         shuf = train_idx[torch.randperm(n_train)]
 
-        for i in range(n_train_batches):
-            start = i * batch_size
-            end = min(start + batch_size, n_train)
-            idx = shuf[start:end]
+        # Prefetch: préparer le premier batch pendant l'init
+        prefetcher = ThreadPoolExecutor(max_workers=2)
 
-            # Construire les séquences (vectorisé CPU) et envoyer au GPU
-            xb = _build_sequence_batch(positions_t, game_start_of, idx, S)
+        def get_batch_indices(batch_i):
+            s = batch_i * batch_size
+            e = min(s + batch_size, n_train)
+            return shuf[s:e]
+
+        # Lancer le prefetch du premier batch
+        next_future = prefetcher.submit(
+            _prefetch_batch, positions_t, game_start_of, y_t,
+            get_batch_indices(0), S, device)
+
+        for i in range(n_train_batches):
+            # Récupérer le batch pré-fetché
+            xb, yb = next_future.result()
             xb = xb.to(device, non_blocking=True)
-            yb = y_t[idx].to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
+
+            # Lancer le prefetch du prochain batch en parallèle du forward
+            if i + 1 < n_train_batches:
+                next_future = prefetcher.submit(
+                    _prefetch_batch, positions_t, game_start_of, y_t,
+                    get_batch_indices(i + 1), S, device)
 
             pad_mask = make_padding_mask(xb)
 
@@ -398,6 +419,7 @@ def train(positions, y, game_starts, n_classes, config,
                       f"{format_time(elapsed)} │ ETA {format_time(eta)}",
                       end="", flush=True)
 
+        prefetcher.shutdown(wait=False)
         epoch_loss /= n_batches
         current_lr = optimizer.param_groups[0]["lr"]
         scheduler.step()
@@ -533,25 +555,30 @@ def run(data_path, model_path="data/transformer_model.pt"):
           f"{n_classes} classes")
     print(f"  → RAM positions: {positions.nbytes / 1024**3:.1f} Go")
 
-    # Auto-tune batch_size pour maximiser l'utilisation GPU
+    # Auto-tune batch_size et architecture pour maximiser l'utilisation GPU
     if torch.cuda.is_available():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         if vram_gb >= 40:
             bs = 4096
+            d_model, n_layers, ff = 512, 6, 2048  # ~20M params
         elif vram_gb >= 16:
             bs = 1024
+            d_model, n_layers, ff = 384, 6, 1536
         elif vram_gb >= 8:
             bs = 512
+            d_model, n_layers, ff = 256, 4, 1024
         else:
             bs = 256
+            d_model, n_layers, ff = 256, 4, 1024
     else:
         bs = 128
+        d_model, n_layers, ff = 256, 4, 1024
 
     config = {
-        "d_model": 256,
+        "d_model": d_model,
         "nhead": 8,
-        "num_layers": 4,
-        "dim_feedforward": 1024,
+        "num_layers": n_layers,
+        "dim_feedforward": ff,
         "lr": 3e-4,
         "batch_size": bs,
         "epochs": 50,

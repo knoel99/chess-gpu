@@ -133,13 +133,88 @@ def run(username, year=None, month=None):
     return out_path
 
 
+# Top 10 joueurs d'échecs (comptes Chess.com)
+TOP_PLAYERS = [
+    "magnuscarlsen",
+    "hikaru",
+    "faaborovsky",       # Fabiano Caruana
+    "lachesisq",         # Ian Nepomniachtchi
+    "firouzja2003",      # Alireza Firouzja
+    "duhless",           # Sergey Karjakin (ancien compte)
+    "gmwso",             # Wesley So
+    "leinier",           # Leinier Dominguez
+    "rpragchess",        # Praggnanandhaa
+    "daniil_dubov",      # Daniil Dubov
+]
+
+
+def run_multi(players=None, year=None, month=None, out_path=None):
+    """Télécharge les parties de plusieurs joueurs et fusionne en un seul PGN.
+    
+    Args:
+        players: liste de usernames (défaut: TOP_PLAYERS)
+        year/month: filtres temporels
+        out_path: chemin de sortie (défaut: data/top_players.pgn)
+    
+    Returns: chemin du fichier PGN fusionné
+    """
+    if players is None:
+        players = TOP_PLAYERS
+    if out_path is None:
+        out_path = "data/top_players.pgn"
+
+    print(f"\n{'='*60}")
+    print(f"  ♟  Téléchargement multi-joueurs ({len(players)} joueurs)")
+    print(f"{'='*60}")
+    for p in players:
+        print(f"    • {p}")
+    print(f"{'='*60}\n")
+
+    os.makedirs("data", exist_ok=True)
+    all_paths = []
+    total_games = 0
+
+    for i, player in enumerate(players):
+        print(f"\n── [{i+1}/{len(players)}] {player} ──")
+        try:
+            path = run(player, year=year, month=month)
+            if path:
+                all_paths.append(path)
+        except Exception as e:
+            print(f"  ⚠ Erreur pour {player}: {e}")
+
+    # Fusionner tous les PGN
+    print(f"\n🔗 Fusion de {len(all_paths)} fichiers...")
+    with open(out_path, "w") as out_f:
+        for path in all_paths:
+            with open(path, "r") as in_f:
+                content = in_f.read()
+                games = content.count("[Event ")
+                total_games += games
+                out_f.write(content)
+                out_f.write("\n")
+
+    size_mb = os.path.getsize(out_path) / 1024 / 1024
+    print(f"\n{'='*60}")
+    print(f"  ✓ {total_games} parties fusionnées dans {out_path}")
+    print(f"    Joueurs : {len(all_paths)}/{len(players)}")
+    print(f"    Taille  : {size_mb:.1f} Mo")
+    print(f"{'='*60}")
+    return out_path
+
+
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <username> [année] [mois]")
+        print(f"Usage: {sys.argv[0]} <username|--top10> [année] [mois]")
         sys.exit(1)
-    run(sys.argv[1],
-        sys.argv[2] if len(sys.argv) > 2 else None,
-        sys.argv[3] if len(sys.argv) > 3 else None)
+
+    year = sys.argv[2] if len(sys.argv) > 2 else None
+    month = sys.argv[3] if len(sys.argv) > 3 else None
+
+    if sys.argv[1] == "--top10":
+        run_multi(year=year, month=month)
+    else:
+        run(sys.argv[1], year, month)
 
 
 if __name__ == "__main__":

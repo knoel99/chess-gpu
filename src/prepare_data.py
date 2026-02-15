@@ -107,14 +107,16 @@ PIECE_TO_IDX = {
 
 
 def board_to_vector(board):
-    """Encode un chess.Board en vecteur one-hot (832,) uint8."""
+    """Encode un chess.Board en vecteur one-hot (832,) uint8.
+    Version optimisée avec piece_map() au lieu de 64× piece_at()."""
     x = np.zeros(832, dtype=np.uint8)
+    # Cases vides : catégorie 0
     for sq in range(64):
-        piece = board.piece_at(sq)
-        if piece is None:
-            idx = 0
-        else:
-            idx = PIECE_TO_IDX[(piece.piece_type, piece.color)]
+        x[sq * 13] = 1
+    # Pièces présentes : écraser la catégorie 0
+    for sq, piece in board.piece_map().items():
+        idx = PIECE_TO_IDX[(piece.piece_type, piece.color)]
+        x[sq * 13] = 0
         x[sq * 13 + idx] = 1
     return x
 
@@ -129,41 +131,105 @@ def move_to_token(move, move_to_idx):
 # 3. Parsing PGN et extraction des exemples
 # ---------------------------------------------------------------------------
 
+def _parse_game(game_text, move_to_idx):
+    """Parse une partie PGN (texte) et retourne (X_list, y_list, n_skipped)."""
+    try:
+        game = chess.pgn.read_game(io.StringIO(game_text))
+    except Exception:
+        return [], [], 0
+
+    if game is None:
+        return [], [], 0
+
+    variant = game.headers.get("Variant", "Standard")
+    if variant not in ("Standard", "standard", ""):
+        return [], [], 0
+
+    board = game.board()
+    X_list = []
+    y_list = []
+    n_skipped = 0
+
+    for move in game.mainline_moves():
+        x = board_to_vector(board)
+        token = move_to_token(move, move_to_idx)
+        if token is not None:
+            X_list.append(x)
+            y_list.append(token)
+        else:
+            n_skipped += 1
+        board.push(move)
+
+    return X_list, y_list, n_skipped
+
+
+def _split_pgn(pgn_path):
+    """Découpe un fichier PGN en textes de parties individuelles."""
+    games = []
+    current = []
+    with open(pgn_path, "r") as f:
+        for line in f:
+            if line.startswith("[Event ") and current:
+                games.append("".join(current))
+                current = []
+            current.append(line)
+    if current:
+        games.append("".join(current))
+    return games
+
+
 def parse_pgn_file(pgn_path, move_to_idx):
-    """Parse un fichier PGN et retourne (X, y) pour l'entraînement."""
+    """Parse un fichier PGN et retourne (X, y) pour l'entraînement.
+    Utilise le parallélisme CPU pour accélérer le parsing."""
+    import time as _time
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from functools import partial
+
+    t0 = _time.time()
+    print(f"  Découpage du PGN...", end=" ", flush=True)
+    game_texts = _split_pgn(pgn_path)
+    n_total = len(game_texts)
+    print(f"{n_total} parties trouvées ({_time.time()-t0:.1f}s)")
+
+    n_workers = max(1, min(os.cpu_count() or 1, 8))
+    print(f"  Parsing avec {n_workers} workers...", flush=True)
+
     X_list = []
     y_list = []
     n_games = 0
     n_skipped_moves = 0
 
-    with open(pgn_path, "r") as f:
-        while True:
-            game = chess.pgn.read_game(f)
-            if game is None:
-                break
+    # Traitement par batch pour réduire l'overhead IPC
+    batch_size = max(100, n_total // (n_workers * 4))
 
-            # Ignorer les variantes (Chess960, etc.)
-            variant = game.headers.get("Variant", "Standard")
-            if variant not in ("Standard", "standard", ""):
-                continue
+    def _parse_batch(batch):
+        bx, by, bs = [], [], 0
+        for text in batch:
+            xl, yl, sk = _parse_game(text, move_to_idx)
+            bx.extend(xl)
+            by.extend(yl)
+            bs += sk
+        return bx, by, len(batch), bs
 
-            board = game.board()
-            n_games += 1
+    batches = [game_texts[i:i+batch_size] for i in range(0, n_total, batch_size)]
 
-            for move in game.mainline_moves():
-                # Encoder la position
-                x = board_to_vector(board)
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_parse_batch, b): i for i, b in enumerate(batches)}
+        done = 0
+        for future in as_completed(futures):
+            bx, by, ng, sk = future.result()
+            X_list.extend(bx)
+            y_list.extend(by)
+            n_games += ng
+            n_skipped_moves += sk
+            done += 1
+            elapsed = _time.time() - t0
+            pct = done / len(batches) * 100
+            print(f"\r  [{done}/{len(batches)}] {pct:.0f}% │ "
+                  f"{n_games} parties │ {len(y_list):,} exemples │ "
+                  f"{elapsed:.0f}s", end="", flush=True)
 
-                # Encoder le coup
-                token = move_to_token(move, move_to_idx)
-                if token is not None:
-                    X_list.append(x)
-                    y_list.append(token)
-                else:
-                    n_skipped_moves += 1
-
-                board.push(move)
-
+    print()
     X = np.array(X_list, dtype=np.uint8)
     y = np.array(y_list, dtype=np.int32)
 

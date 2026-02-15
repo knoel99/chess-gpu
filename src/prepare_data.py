@@ -178,12 +178,23 @@ def _split_pgn(pgn_path):
     return games
 
 
+def _parse_batch(args):
+    """Parse un batch de parties PGN. Fonction module-level pour ProcessPoolExecutor."""
+    batch, move_to_idx = args
+    bx, by, bs = [], [], 0
+    for text in batch:
+        xl, yl, sk = _parse_game(text, move_to_idx)
+        bx.extend(xl)
+        by.extend(yl)
+        bs += sk
+    return bx, by, len(batch), bs
+
+
 def parse_pgn_file(pgn_path, move_to_idx):
     """Parse un fichier PGN et retourne (X, y) pour l'entraînement.
     Utilise le parallélisme CPU pour accélérer le parsing."""
     import time as _time
     from concurrent.futures import ProcessPoolExecutor, as_completed
-    from functools import partial
 
     t0 = _time.time()
     print(f"  Découpage du PGN...", end=" ", flush=True)
@@ -202,19 +213,10 @@ def parse_pgn_file(pgn_path, move_to_idx):
     # Traitement par batch pour réduire l'overhead IPC
     batch_size = max(100, n_total // (n_workers * 4))
 
-    def _parse_batch(batch):
-        bx, by, bs = [], [], 0
-        for text in batch:
-            xl, yl, sk = _parse_game(text, move_to_idx)
-            bx.extend(xl)
-            by.extend(yl)
-            bs += sk
-        return bx, by, len(batch), bs
-
     batches = [game_texts[i:i+batch_size] for i in range(0, n_total, batch_size)]
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
-        futures = {pool.submit(_parse_batch, b): i for i, b in enumerate(batches)}
+        futures = {pool.submit(_parse_batch, (b, move_to_idx)): i for i, b in enumerate(batches)}
         done = 0
         for future in as_completed(futures):
             bx, by, ng, sk = future.result()

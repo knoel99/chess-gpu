@@ -52,14 +52,42 @@ def board_to_vector(board):
 
 
 def load_model(model_path):
-    """Charge le modèle 2 couches (W1, b1, W2, b2, move_tokens)."""
+    """Charge le modèle multi-couches.
+    
+    Format ancien : W1, b1, W2, b2, move_tokens (2 couches)
+    Format nouveau : n_layers, W0..Wn, b0..bn, bn0_*..bnn_* (N couches + BN)
+    
+    Retourne: (weights, move_tokens)
+      weights = liste de dicts : [{"W": ..., "b": ..., "bn": {...}|None}, ...]
+    """
     data = np.load(model_path)
-    W1 = xp.array(data["W1"])
-    b1 = xp.array(data["b1"])
-    W2 = xp.array(data["W2"])
-    b2 = xp.array(data["b2"])
     move_tokens = data["move_tokens"]
-    return W1, b1, W2, b2, move_tokens
+
+    if "n_layers" in data:
+        # Format multi-couches (train_torch.py)
+        n_layers = int(data["n_layers"])
+        weights = []
+        for i in range(n_layers):
+            W = xp.array(data[f"W{i}"])
+            b = xp.array(data[f"b{i}"])
+            bn = None
+            bn_w_key = f"bn{i}_weight"
+            if bn_w_key in data:
+                bn = {
+                    "weight": xp.array(data[f"bn{i}_weight"]),
+                    "bias": xp.array(data[f"bn{i}_bias"]),
+                    "mean": xp.array(data[f"bn{i}_running_mean"]),
+                    "var": xp.array(data[f"bn{i}_running_var"]),
+                }
+            weights.append({"W": W, "b": b, "bn": bn})
+    else:
+        # Format legacy 2 couches (train.py)
+        weights = [
+            {"W": xp.array(data["W1"]), "b": xp.array(data["b1"]), "bn": None},
+            {"W": xp.array(data["W2"]), "b": xp.array(data["b2"]), "bn": None},
+        ]
+
+    return weights, move_tokens
 
 
 def build_token_to_move(move_tokens):
@@ -78,20 +106,32 @@ _gpu_lock = threading.Lock()
 _log_lock = threading.Lock()
 
 
-def get_top_moves(board, W1, b1, W2, b2, token_to_move, k=10):
-    """Retourne les k meilleurs coups légaux avec leurs probabilités."""
+def get_top_moves(board, weights, token_to_move, k=10):
+    """Retourne les k meilleurs coups légaux avec leurs probabilités.
+    
+    weights = liste de dicts [{"W": ..., "b": ..., "bn": ...}, ...]
+    """
     x = board_to_vector(board)
-    _mod = type(W1).__module__.split(".")[0]
+    _mod = type(weights[0]["W"]).__module__.split(".")[0]
     if _mod == "cupy":
         import cupy as _xp
     else:
         _xp = np
 
     with _gpu_lock:
-        x_arr = _xp.asarray(x.reshape(1, -1))
-        z1 = x_arr @ W1.T + b1
-        a1 = _xp.maximum(z1, 0)
-        logits = a1 @ W2.T + b2
+        a = _xp.asarray(x.reshape(1, -1))
+        for i, layer in enumerate(weights):
+            a = a @ layer["W"].T + layer["b"]
+            # Dernière couche : pas de ReLU/BN
+            if i < len(weights) - 1:
+                # BatchNorm (mode inférence)
+                if layer["bn"] is not None:
+                    bn = layer["bn"]
+                    eps = 1e-5
+                    a = (a - bn["mean"]) / _xp.sqrt(bn["var"] + eps)
+                    a = a * bn["weight"] + bn["bias"]
+                a = _xp.maximum(a, 0)  # ReLU
+        logits = a
         logits = logits - logits.max()
         probs = _xp.exp(logits)
         probs = probs / probs.sum()
@@ -144,7 +184,7 @@ def material_detail(board):
     return w, b, w - b
 
 
-def search(board, W1, b1, W2, b2, token_to_move, model_color,
+def search(board, weights, token_to_move, model_color,
            depth, deadline, top_k=5, stats=None):
     """
     Recherche arborescente avec le réseau de neurones.
@@ -168,7 +208,7 @@ def search(board, W1, b1, W2, b2, token_to_move, model_color,
     if depth == 0:
         return evaluate_position(board, model_color), None
 
-    candidates = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=top_k)
+    candidates = get_top_moves(board, weights, token_to_move, k=top_k)
     if stats is not None:
         stats["nodes"] += 1
         stats["forward_passes"] += 1
@@ -186,7 +226,7 @@ def search(board, W1, b1, W2, b2, token_to_move, model_color,
 
         board.push(move)
         child_score, _ = search(
-            board, W1, b1, W2, b2, token_to_move, model_color,
+            board, weights, token_to_move, model_color,
             depth - 1, deadline, top_k=max(3, top_k - 1), stats=stats
         )
         # Bonus pour les coups à haute probabilité du réseau
@@ -217,12 +257,12 @@ def evaluate_position(board, model_color):
     return mat + mobility
 
 
-def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
+def predict_move(board, weights, token_to_move, think_time=0):
     """Prédit le meilleur coup. Retourne (move, info_dict)."""
     legal_count = board.legal_moves.count()
 
     if think_time <= 0:
-        top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
+        top = get_top_moves(board, weights, token_to_move, k=1)
         if top:
             info = {"depth": 0, "nodes": 1, "forward_passes": 1,
                     "legal_moves": legal_count, "prob": top[0][1]}
@@ -247,7 +287,7 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
 
         depth_stats = {"nodes": 0, "forward_passes": 0}
         score, move = search(
-            board, W1, b1, W2, b2, token_to_move, model_color,
+            board, weights, token_to_move, model_color,
             depth, deadline, top_k=7, stats=depth_stats
         )
         total_stats["nodes"] += depth_stats["nodes"]
@@ -259,7 +299,7 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
             depth_reached = depth
 
     if best_move is None:
-        top = get_top_moves(board, W1, b1, W2, b2, token_to_move, k=1)
+        top = get_top_moves(board, weights, token_to_move, k=1)
         best_move = top[0][0] if top else list(board.legal_moves)[0]
         total_stats["forward_passes"] += 1
 
@@ -273,7 +313,7 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
 
 # ── Partie ──────────────────────────────────────────────────────────────────
 
-def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
+def play_game(weights, token_to_move, engine, model_color,
               sf_time=0.1, think_time=0, move_callback=None, game_id=0,
               log_file=None):
     """Joue une partie complète. Retourne (score, pgn_string, mat_history)."""
@@ -290,7 +330,7 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
 
     while not board.is_game_over() and move_count < 200:
         if board.turn == model_color:
-            move, info = predict_move(board, W1, b1, W2, b2, token_to_move,
+            move, info = predict_move(board, weights, token_to_move,
                                       think_time=think_time)
             node = node.add_variation(move)
             comment = (f"d={info['depth']} n={info['nodes']} "
@@ -632,12 +672,12 @@ def find_stockfish():
 
 def _play_game_thread(args):
     """Worker thread pour jouer une partie (partage GPU via threads)."""
-    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, log_file = args
+    weights, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, log_file = args
 
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
-    score, pgn, mat_history = play_game(W1, b1, W2, b2, token_to_move, engine,
+    score, pgn, mat_history = play_game(weights, token_to_move, engine,
                            model_color, think_time=think_time,
                            move_callback=None, game_id=game_id,
                            log_file=log_file)
@@ -764,10 +804,18 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
     # Charger modèle
     print(f"  Modèle    : {model_path}")
-    W1, b1, W2, b2, move_tokens = load_model(model_path)
+    weights, move_tokens = load_model(model_path)
     token_to_move = build_token_to_move(move_tokens)
+    n_layers = len(weights)
+    arch_parts = [str(weights[0]["W"].shape[1])]
+    for i, layer in enumerate(weights):
+        if i < n_layers - 1:
+            arch_parts.append(f"{layer['W'].shape[0]} ({'BN+' if layer['bn'] else ''}ReLU)")
+        else:
+            arch_parts.append(f"{layer['W'].shape[0]} (softmax)")
+    arch_str = " → ".join(arch_parts)
     print(f"  Tokens    : {len(token_to_move)} coups")
-    print(f"  Arch.     : {W1.shape[1]} → {W1.shape[0]} (ReLU) → {W2.shape[0]} (softmax)")
+    print(f"  Arch.     : {arch_str}")
     print(f"  Parties   : {n_games}")
     print(f"  Mode      : {mode}")
     print(f"  Workers   : {n_workers}" + (" (parallèle)" if parallel else " (séquentiel)"))
@@ -807,7 +855,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
         tasks = []
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
-            tasks.append((W1, b1, W2, b2, token_to_move,
+            tasks.append((weights, token_to_move,
                          sf_path, stockfish_elo, model_color, think_time, i, log_file))
 
         game_results = [None] * n_games
@@ -870,7 +918,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
                 sys.stdout.flush()
 
             print(f"  G{i+1:02d} │ {color_str} │ début", end="")
-            score, pgn, mat_history = play_game(W1, b1, W2, b2, token_to_move, engine,
+            score, pgn, mat_history = play_game(weights, token_to_move, engine,
                                    model_color, think_time=think_time,
                                    move_callback=_seq_cb, game_id=i,
                                    log_file=log_file)
@@ -952,7 +1000,7 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
     print(f"  Workers    : {n_workers}")
     print(f"{'='*60}\n")
 
-    W1, b1, W2, b2, move_tokens = load_model(model_path)
+    weights, move_tokens = load_model(model_path)
     token_to_move = build_token_to_move(move_tokens)
 
     sf_path = find_stockfish()
@@ -975,7 +1023,7 @@ def benchmark(model_path, n_games=10, stockfish_elo=1350, think_time=1.0, n_work
         tasks = []
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
-            tasks.append((W1, b1, W2, b2, token_to_move,
+            tasks.append((weights, token_to_move,
                          sf_path, stockfish_elo, model_color, tt, i, None))
 
         game_lengths = []

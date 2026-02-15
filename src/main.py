@@ -14,7 +14,10 @@ import os
 
 from download_data import run as download
 from prepare_data import run as prepare
-from train import run as train
+try:
+    from train_torch import run as train
+except ImportError:
+    from train import run as train
 
 
 def main():

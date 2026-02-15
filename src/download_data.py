@@ -77,20 +77,56 @@ def run(username, year=None, month=None):
     out_path += ".pgn"
 
     total_games = 0
-    with open(out_path, "w") as f:
-        for i, url in enumerate(archives):
+    results = {}
+
+    # Téléchargement parallèle en fonction des ressources
+    n_archives = len(archives)
+    max_workers = min(n_archives, max(1, min(os.cpu_count() or 1, 8)))
+
+    if max_workers > 1 and n_archives > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        print(f"  Workers   : {max_workers} (parallèle)")
+
+        def _dl(idx_url):
+            idx, url = idx_url
             parts = url.split("/")
             y, m = parts[-2], parts[-1]
-            print(f"  [{i+1}/{len(archives)}] {y}/{m}...", end=" ", flush=True)
-
             pgn = download_pgn(url)
-            games_count = pgn.count('[Event ')
-            total_games += games_count
-            f.write(pgn)
-            f.write("\n")
+            count = pgn.count('[Event ')
+            return idx, y, m, pgn, count
 
-            print(f"{games_count} parties")
-            time.sleep(0.3)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_dl, (i, url)): i
+                       for i, url in enumerate(archives)}
+            for future in as_completed(futures):
+                idx, y, m, pgn, count = future.result()
+                results[idx] = pgn
+                total_games += count
+                done = len(results)
+                print(f"  [{done}/{n_archives}] {y}/{m} → {count} parties")
+                sys.stdout.flush()
+
+        # Écrire dans l'ordre
+        with open(out_path, "w") as f:
+            for idx in range(n_archives):
+                f.write(results[idx])
+                f.write("\n")
+    else:
+        with open(out_path, "w") as f:
+            for i, url in enumerate(archives):
+                parts = url.split("/")
+                y, m = parts[-2], parts[-1]
+                print(f"  [{i+1}/{n_archives}] {y}/{m}...", end=" ", flush=True)
+
+                pgn = download_pgn(url)
+                games_count = pgn.count('[Event ')
+                total_games += games_count
+                f.write(pgn)
+                f.write("\n")
+
+                print(f"{games_count} parties")
+                time.sleep(0.3)
 
     print(f"\n✓ {total_games} parties sauvegardées dans {out_path}")
     print(f"  Taille : {os.path.getsize(out_path) / 1024 / 1024:.1f} Mo")

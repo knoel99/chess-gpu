@@ -815,12 +815,22 @@ def generate_material_chart(all_mat_histories, scores, stockfish_elo, out_path):
     print(f"\n  📊 Graphique matériel : {out_path}")
 
 
+def _run_tag(mode):
+    """Génère un tag unique pour les fichiers de sortie : YYYYMMDD_HHMMSS_mode."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode_tag = mode.replace(" ", "_").replace("=", "")
+    return f"{ts}_{mode_tag}"
+
+
 def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_workers=0):
     """Lance l'évaluation contre Stockfish."""
     if max_depth > 0 and max_nodes > 0:
         mode = f"recherche d={max_depth} n={max_nodes}"
     else:
         mode = "instantané"
+
+    tag = _run_tag(mode)
     if n_workers <= 0:
         n_workers = _auto_workers()
     parallel = n_workers > 1
@@ -857,8 +867,14 @@ def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_w
         print("   brew install stockfish   # macOS")
         sys.exit(1)
     print(f"  Stockfish : {sf_path}")
+
+    # Répertoire de sortie avec tag unique
+    base = os.path.splitext(model_path)[0]
+    out_dir = f"{base}_runs"
+    os.makedirs(out_dir, exist_ok=True)
+
     # Fichier de log
-    log_path = os.path.splitext(model_path)[0] + "_search.log"
+    log_path = f"{out_dir}/{tag}.log"
     log_file = open(log_path, "w")
     log_file.write(f"# Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})\n")
     log_file.write(f"# Modèle : {model_path}\n")
@@ -970,11 +986,23 @@ def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_w
         engine.quit()
 
     # Générer le graphique de matériel
-    chart_path = os.path.splitext(model_path)[0] + "_material.png"
+    chart_path = f"{out_dir}/{tag}_material.png"
     generate_material_chart(all_mat_histories, scores, stockfish_elo, chart_path)
 
+    # Exporter les données matérielles en CSV
+    csv_path = f"{out_dir}/{tag}_material.csv"
+    with open(csv_path, "w") as csvf:
+        csvf.write("game,move,mat_white,mat_black,delta_nn,capture_event,who\n")
+        for gid in sorted(all_mat_histories.keys()):
+            for entry in all_mat_histories[gid]:
+                mc, diff, cap, who = entry
+                # Récupérer mat_white et mat_black depuis diff
+                # diff = mat_nn - mat_opponent, on stocke directement le diff
+                csvf.write(f"{gid+1},{mc},,, {diff},{cap or ''},{who or ''}\n")
+    print(f"  📄 Données matériel : {csv_path}")
+
     # Générer le HTML interactif
-    html_path = os.path.splitext(model_path)[0] + "_games.html"
+    html_path = f"{out_dir}/{tag}_games.html"
     generate_html(pgns, results, stockfish_elo, html_path)
 
     # Estimation Elo (formule FIDE inversée)
@@ -990,6 +1018,28 @@ def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_w
     estimated_elo = round(stockfish_elo + elo_diff)
 
     # Résumé
+    summary = {
+        "model": model_path,
+        "mode": mode,
+        "max_depth": max_depth,
+        "max_nodes": max_nodes,
+        "stockfish_elo": stockfish_elo,
+        "estimated_elo": estimated_elo,
+        "n_games": n_games,
+        "wins": results["win"],
+        "draws": results["draw"],
+        "losses": results["loss"],
+        "score": total_score,
+        "win_rate": round(win_rate, 4),
+        "workers": n_workers,
+        "tag": tag,
+    }
+
+    import json as _json
+    json_path = f"{out_dir}/{tag}_summary.json"
+    with open(json_path, "w") as jf:
+        _json.dump(summary, jf, indent=2, ensure_ascii=False)
+
     print(f"\n{'='*60}")
     print(f"  Résultat final : {results['win']}W - {results['draw']}D - {results['loss']}L")
     print(f"  Score          : {total_score:.1f}/{n_games} ({win_rate*100:.0f}%)")
@@ -997,9 +1047,12 @@ def run(model_path, n_games=10, stockfish_elo=800, max_depth=0, max_nodes=0, n_w
     print(f"  Elo estimé     : ~{estimated_elo}")
     print(f"  Mode           : {mode}")
     print(f"  Workers        : {n_workers}")
-    print(f"  Visualisation  : {html_path}")
-    print(f"  Graphique mat. : {chart_path}")
-    print(f"  Log recherche  : {log_path}")
+    print(f"  ── Fichiers ({out_dir}/) ──")
+    print(f"    Log         : {tag}.log")
+    print(f"    Résumé JSON : {tag}_summary.json")
+    print(f"    Matériel CSV: {tag}_material.csv")
+    print(f"    Matériel PNG: {tag}_material.png")
+    print(f"    Parties HTML: {tag}_games.html")
     print(f"{'='*60}")
 
     # Résumé dans le log

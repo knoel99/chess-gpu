@@ -130,6 +130,20 @@ def evaluate_material(board):
     return score
 
 
+def material_detail(board):
+    """Retourne (mat_blanc, mat_noir, diff) en valeur de pièces."""
+    w, b = 0, 0
+    for sq in chess.SQUARES:
+        piece = board.piece_at(sq)
+        if piece:
+            val = PIECE_VALUES[piece.piece_type]
+            if piece.color == chess.WHITE:
+                w += val
+            else:
+                b += val
+    return w, b, w - b
+
+
 def search(board, W1, b1, W2, b2, token_to_move, model_color,
            depth, deadline, top_k=5, stats=None):
     """
@@ -281,29 +295,35 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
                 comment = f"p={info['prob']:.3f} legal={info['legal_moves']}"
             node.comment = comment
             who = "🤖"
-
-            if log_file is not None:
-                half = move_count + 1
-                move_num = (half + 1) // 2
-                dot = "." if board.turn == chess.WHITE else "..."
-                with _log_lock:
-                    log_file.write(
-                        f"G{game_id+1:02d} │ {move_num}{dot}{move.uci():6s} │ "
-                        f"depth={info['depth']:2d} │ nodes={info['nodes']:5d} │ "
-                        f"fw_pass={info['forward_passes']:5d} │ "
-                        f"legal={info['legal_moves']:3d} │ "
-                        f"score={info.get('score', 0):+.1f} │ "
-                        f"time={info.get('time', 0):.2f}s\n"
-                    )
-                    log_file.flush()
         else:
             result = engine.play(board, chess.engine.Limit(time=sf_time))
             move = result.move
             node = node.add_variation(move)
             who = "♟"
+            info = None
 
         board.push(move)
         move_count += 1
+
+        if log_file is not None:
+            mw, mb, diff = material_detail(board)
+            move_num = (move_count + 1) // 2
+            dot = "." if board.turn == chess.BLACK else "..."
+            if info is not None:
+                search_str = (f"d={info['depth']:2d} n={info['nodes']:5d} "
+                              f"fw={info['forward_passes']:5d} "
+                              f"sc={info.get('score', 0):+6.1f} "
+                              f"t={info.get('time', 0):.2f}s")
+            else:
+                search_str = f"{'stockfish':>34s}"
+            with _log_lock:
+                log_file.write(
+                    f"G{game_id+1:02d} │ {move_num:3d}{dot}{move.uci():6s} {who} │ "
+                    f"mat ⬜{mw:2d} ⬛{mb:2d} Δ{diff:+3d} │ "
+                    f"legal={board.legal_moves.count():3d} │ "
+                    f"{search_str}\n"
+                )
+                log_file.flush()
 
         if move_callback:
             move_callback(game_id, move_count, who, move.uci(), board.is_game_over())
@@ -639,7 +659,7 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
     log_file.write(f"# Évaluation : Réseau vs Stockfish (Elo ~{stockfish_elo})\n")
     log_file.write(f"# Modèle : {model_path}\n")
     log_file.write(f"# Mode : {mode} | Workers : {n_workers}\n")
-    log_file.write(f"# Format : Game │ Coup │ depth │ nodes │ fw_pass │ legal │ score │ time\n")
+    log_file.write(f"# Format : Game │ Coup │ mat ⬜ ⬛ Δ │ legal │ search stats\n")
     log_file.write(f"{'─'*90}\n")
     log_file.flush()
     print(f"  Log       : {log_path}")

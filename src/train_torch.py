@@ -560,6 +560,17 @@ def run(data_path, model_path="data/model.npz"):
     plot_path = os.path.splitext(model_path)[0] + "_curves.png"
     model, history = train(X, y, n_classes, config, plot_path=plot_path)
 
+    # Sauvegarder checkpoint PyTorch (sécurité avant export)
+    ckpt_path = os.path.splitext(model_path)[0] + "_checkpoint.pt"
+    torch.save({
+        "state_dict": model.state_dict(),
+        "move_tokens": move_tokens,
+        "n_classes": n_classes,
+        "config": config,
+        "history": history,
+    }, ckpt_path)
+    print(f"  💾 Checkpoint PyTorch : {ckpt_path}")
+
     # Export en .npz compatible evaluate.py
     export_to_npz(model, move_tokens, model_path)
     return model_path

@@ -195,14 +195,30 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         torch.from_numpy(y_val).long()
     )
 
+    n_workers = min(8, os.cpu_count() or 2)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=2, pin_memory=True, drop_last=True)
+                              num_workers=n_workers, pin_memory=True,
+                              drop_last=True, persistent_workers=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size * 2, shuffle=False,
-                            num_workers=2, pin_memory=True)
+                            num_workers=n_workers, pin_memory=True,
+                            persistent_workers=True)
 
     # Modèle
     model = ChessNet(D, n_classes, hidden=hidden, dropout=dropout).to(device)
     n_params = sum(p.numel() for p in model.parameters())
+
+    # Compiler le modèle pour plus de vitesse (PyTorch 2.0+)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        try:
+            model = torch.compile(model)
+            print("  ⚡ torch.compile activé")
+        except Exception:
+            pass
+
+    # AMP (Mixed Precision) pour accélérer sur GPU
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
     # Optimizer + Scheduler
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
@@ -252,13 +268,21 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
         n_batches = 0
 
         for i, (xb, yb) in enumerate(train_loader):
-            xb, yb = xb.to(device), yb.to(device)
+            xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
 
-            optimizer.zero_grad()
-            logits = model(xb)
-            loss = criterion(logits, yb)
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            if use_amp:
+                with torch.amp.autocast("cuda"):
+                    logits = model(xb)
+                    loss = criterion(logits, yb)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                logits = model(xb)
+                loss = criterion(logits, yb)
+                loss.backward()
+                optimizer.step()
 
             epoch_loss += loss.item()
             n_batches += 1
@@ -290,9 +314,14 @@ def train(X, y, n_classes, config, plot_path="data/training_curves.png"):
 
         with torch.no_grad():
             for xb, yb in val_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                logits = model(xb)
-                val_loss += criterion(logits, yb).item() * len(yb)
+                xb, yb = xb.to(device, non_blocking=True), yb.to(device, non_blocking=True)
+                if use_amp:
+                    with torch.amp.autocast("cuda"):
+                        logits = model(xb)
+                        val_loss += criterion(logits, yb).item() * len(yb)
+                else:
+                    logits = model(xb)
+                    val_loss += criterion(logits, yb).item() * len(yb)
                 val_top1 += accuracy_topk(logits, yb, k=1) * len(yb)
                 val_top5 += accuracy_topk(logits, yb, k=5) * len(yb)
                 n_val += len(yb)
@@ -427,9 +456,23 @@ def run(data_path, model_path="data/model.npz"):
     n_classes = len(move_tokens)
     print(f"  → {X.shape[0]:,} exemples, {X.shape[1]} features, {n_classes} classes")
 
+    # Auto-tune batch_size selon VRAM disponible
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        if vram_gb >= 40:
+            bs = 8192
+        elif vram_gb >= 16:
+            bs = 4096
+        elif vram_gb >= 8:
+            bs = 2048
+        else:
+            bs = 1024
+    else:
+        bs = 512
+
     config = {
         "lr": 1e-3,
-        "batch_size": 512,
+        "batch_size": bs,
         "epochs": 50,
         "hidden": (1024, 512, 256),
         "dropout": 0.3,

@@ -28,14 +28,14 @@ os.chdir("/content/chess-gpu")
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 # ── 2. Download + Prepare + Train ──
-sh("python src/main.py --top10")
+sh("python src/phase1_mlp/main.py --top10")
 
 # ── 3. Évaluations (seulement si modèle existe) ──
 MODEL = "data/top_players_model.npz"
 if os.path.exists(MODEL):
-    sh(f"python src/evaluate.py {MODEL} --games 10")
-    sh(f"python src/evaluate.py {MODEL} --games 10 --max-depth 4 --max-nodes 1000")
-    sh(f"python src/evaluate.py {MODEL} --games 10 --benchmark --max-depth 4 --max-nodes 1000")
+    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10")
+    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10 --max-depth 4 --max-nodes 1000")
+    sh(f"python src/phase1_mlp/evaluate.py {MODEL} --games 10 --benchmark --max-depth 4 --max-nodes 1000")
 
     # ── 4. Résumé des résultats ──
     print("\n" + "="*60)

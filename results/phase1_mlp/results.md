@@ -244,7 +244,7 @@ interrogeant `nvidia-smi` toutes les 5 secondes. Voici un extrait typique pendan
 
 ### Courbes d'entraînement
 
-![Courbes d'entraînement](data/results/training_curves.png)
+![Courbes d'entraînement](training_curves.png)
 
 Le tableau ci-dessous détaille l'évolution epoch par epoch. Toutes les 50 epochs ont amélioré
 la validation loss (★ à chaque epoch), ce qui signifie que le modèle n'a pas du tout overfitté
@@ -368,11 +368,11 @@ point de vue du réseau.
 
 **Mode instantané :**
 
-![Matériel instantané](data/results/20260215_175526_instantané_material.png)
+![Matériel instantané](instant_material.png)
 
 **Mode recherche :**
 
-![Matériel recherche](data/results/20260215_175537_recherche_d4_n1000_material.png)
+![Matériel recherche](search_d4_material.png)
 
 ### Analyse approfondie des parties
 
@@ -444,24 +444,42 @@ sous-dossier dédié. L'horodatage garantit que les résultats ne sont jamais é
 de comparer les performances entre différentes versions du modèle.
 
 ```
-data/
-├── top_players.pgn                          # 598.5 Mo — parties brutes (PGN)
-├── top_players.npz                          # 256.9 Mo — données encodées
-├── top_players_model.npz                    # 7.2 Mo  — poids du réseau (NumPy)
-├── top_players_model_checkpoint.pt          # 7.8 Mo  — checkpoint PyTorch complet
-├── top_players_model_curves.png             # courbes d'entraînement (loss, accuracy)
+chess-gpu/
+├── src/
+│   ├── common/                              # code partagé entre phases
+│   │   ├── download_data.py                 # téléchargement PGN Chess.com
+│   │   └── prepare_data.py                  # PGN → vecteurs .npz
+│   ├── phase1_mlp/                          # réseau feedforward (cette phase)
+│   │   ├── main.py                          # orchestrateur pipeline
+│   │   ├── train_torch.py                   # entraînement PyTorch (GPU)
+│   │   ├── train.py                         # ancien modèle linéaire (archive)
+│   │   └── evaluate.py                      # évaluation vs Stockfish
+│   └── phase2_transformer/                  # futur — architecture Transformer
 │
-└── top_players_model_runs/                  # résultats d'évaluation
-    ├── 20260215_175526_instantané.log              #  87 Ko — log coup par coup
-    ├── 20260215_175526_instantané_summary.json     # 304 o  — résumé machine-readable
-    ├── 20260215_175526_instantané_material.csv     #  14 Ko — matériel par coup
-    ├── 20260215_175526_instantané_material.png     # 215 Ko — graphique matériel
-    ├── 20260215_175526_instantané_games.html       #  25 Ko — visualisation interactive
-    ├── 20260215_175537_recherche_d4_n1000.log
-    ├── 20260215_175537_recherche_d4_n1000_summary.json
-    ├── 20260215_175537_recherche_d4_n1000_material.csv
-    ├── 20260215_175537_recherche_d4_n1000_material.png
-    └── 20260215_175537_recherche_d4_n1000_games.html
+├── results/
+│   └── phase1_mlp/
+│       ├── results.md                       # ce document
+│       ├── training_curves.png              # courbes loss/accuracy
+│       ├── instant_material.png             # graphique matériel (mode instantané)
+│       ├── instant_summary.json             # résumé JSON (mode instantané)
+│       ├── instant_games.html               # visualisation interactive
+│       ├── search_d4_material.png           # graphique matériel (recherche d=4)
+│       ├── search_d4_summary.json           # résumé JSON (recherche d=4)
+│       └── search_d4_games.html             # visualisation interactive
+│
+├── docs/
+│   ├── king_matrix.md                       # théorie matricielle du roi
+│   └── model.md                             # théorie du modèle linéaire
+│
+├── data/                                    # données (gitignored)
+│   ├── top_players.pgn                      # 598.5 Mo — parties brutes
+│   ├── top_players.npz                      # 256.9 Mo — données encodées
+│   ├── top_players_model.npz                # 7.2 Mo  — poids du réseau
+│   └── top_players_model_checkpoint.pt      # 7.8 Mo  — checkpoint PyTorch
+│
+├── run_colab.py                             # script tout-en-un Colab
+├── requirements.txt
+└── README.md
 ```
 
 ### Format du JSON de résumé
@@ -637,13 +655,15 @@ cd /content && python chess-gpu/run_colab.py
 ### Copier les résultats dans le repo pour les versionner
 
 ```bash
-mkdir -p /content/chess-gpu/data/results
-cp /content/chess-gpu/data/top_players_model_curves.png /content/chess-gpu/data/results/training_curves.png
-cp /content/chess-gpu/data/top_players_model_runs/*_material.png /content/chess-gpu/data/results/
-cp /content/chess-gpu/data/top_players_model_runs/*_summary.json /content/chess-gpu/data/results/
-cp /content/chess-gpu/data/top_players_model_runs/*_games.html /content/chess-gpu/data/results/
-cp /content/chess-gpu/data/top_players_model_runs/*.log /content/chess-gpu/data/results/
-cd /content/chess-gpu && git add data/results/ && git commit -m "docs: add evaluation results" && git push
+mkdir -p /content/chess-gpu/results/phase1_mlp
+cp /content/chess-gpu/data/top_players_model_curves.png /content/chess-gpu/results/phase1_mlp/training_curves.png
+cp /content/chess-gpu/data/top_players_model_runs/*instantané*_material.png /content/chess-gpu/results/phase1_mlp/instant_material.png
+cp /content/chess-gpu/data/top_players_model_runs/*instantané*_summary.json /content/chess-gpu/results/phase1_mlp/instant_summary.json
+cp /content/chess-gpu/data/top_players_model_runs/*instantané*_games.html /content/chess-gpu/results/phase1_mlp/instant_games.html
+cp /content/chess-gpu/data/top_players_model_runs/*recherche*_material.png /content/chess-gpu/results/phase1_mlp/search_d4_material.png
+cp /content/chess-gpu/data/top_players_model_runs/*recherche*_summary.json /content/chess-gpu/results/phase1_mlp/search_d4_summary.json
+cp /content/chess-gpu/data/top_players_model_runs/*recherche*_games.html /content/chess-gpu/results/phase1_mlp/search_d4_games.html
+cd /content/chess-gpu && git add results/ && git commit -m "docs: add phase1 results" && git push
 ```
 
 ### Monitoring GPU

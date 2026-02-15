@@ -14,17 +14,22 @@ Usage:
 import sys
 import os
 
-# Résoudre les chemins : data/ est à la racine du repo, pas dans src/
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Résoudre les chemins : data/ est à la racine du repo
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.path.join(REPO_ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-from download_data import run as download, run_multi as download_multi
-from prepare_data import run as prepare
+# Ajouter src/ au path pour les imports common et phase1
+SRC_DIR = os.path.join(REPO_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from common.download_data import run as download, run_multi as download_multi
+from common.prepare_data import run as prepare
 try:
-    from train_torch import run as train
+    from phase1_mlp.train_torch import run as train
 except ImportError:
-    from train import run as train
+    from phase1_mlp.train import run as train
 
 
 def pipeline(pgn_path, npz_path, model_path, label=""):

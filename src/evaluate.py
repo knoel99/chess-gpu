@@ -237,7 +237,7 @@ def predict_move(board, W1, b1, W2, b2, token_to_move, think_time=0):
 # ── Partie ──────────────────────────────────────────────────────────────────
 
 def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
-              sf_time=0.1, think_time=0):
+              sf_time=0.1, think_time=0, move_callback=None, game_id=0):
     """Joue une partie complète. Retourne (score, pgn_string)."""
     board = chess.Board()
     game = chess.pgn.Game()
@@ -255,13 +255,18 @@ def play_game(W1, b1, W2, b2, token_to_move, engine, model_color,
                 node.comment = f"depth={info}"
             else:
                 node.comment = f"p={info:.3f}"
+            who = "🤖"
         else:
             result = engine.play(board, chess.engine.Limit(time=sf_time))
             move = result.move
             node = node.add_variation(move)
+            who = "♟"
 
         board.push(move)
         move_count += 1
+
+        if move_callback:
+            move_callback(game_id, move_count, who, move.uci(), board.is_game_over())
 
     result = board.result()
     game.headers["Result"] = result
@@ -418,7 +423,7 @@ function loadGame(idx) {{
   // Headers
   gameHeaders = {{}};
   pgn.split('\\n').forEach(l => {{
-    const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
+    const m = l.match(/^\\[(\\w+)\\s+"(.+)"\\]/);
     if (m) gameHeaders[m[1]] = m[2];
   }});
   const wName = gameHeaders.White || 'Blancs';
@@ -496,7 +501,7 @@ pgns.forEach((pgn, i) => {{
   const opt = document.createElement('option');
   const headers = {{}};
   pgn.split('\\n').forEach(l => {{
-    const m = l.match(/^\\[(\w+)\\s+"(.+)"\\]/);
+    const m = l.match(/^\\[(\\w+)\\s+"(.+)"\\]/);
     if (m) headers[m[1]] = m[2];
   }});
   opt.value = i;
@@ -537,22 +542,25 @@ def find_stockfish():
 
 def _play_game_worker(args):
     """Worker pour jouer une partie en parallèle (CPU only)."""
-    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time = args
+    W1, b1, W2, b2, token_to_move, sf_path, sf_elo, model_color, think_time, game_id, queue = args
 
-    # Chaque worker utilise NumPy (pas CuPy — pas de GPU partagé entre processes)
     import numpy as _xp
 
-    # Convertir les poids en arrays locaux
     W1_l = _xp.array(W1)
     b1_l = _xp.array(b1)
     W2_l = _xp.array(W2)
     b2_l = _xp.array(b2)
 
+    def _cb(gid, move_num, who, uci, game_over):
+        if queue is not None:
+            queue.put((gid, move_num, who, uci, game_over))
+
     engine = chess.engine.SimpleEngine.popen_uci(sf_path)
     engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(sf_elo, 1350)})
 
     score, pgn = play_game(W1_l, b1_l, W2_l, b2_l, token_to_move, engine,
-                           model_color, think_time=think_time)
+                           model_color, think_time=think_time,
+                           move_callback=_cb, game_id=game_id)
     engine.quit()
     return score, pgn, model_color
 
@@ -608,53 +616,104 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
 
     if parallel:
         from concurrent.futures import ProcessPoolExecutor, as_completed
+        from multiprocessing import Manager
+        import sys
+
+        manager = Manager()
+        queue = manager.Queue()
 
         tasks = []
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
             tasks.append((W1_cpu, b1_cpu, W2_cpu, b2_cpu, token_to_move,
-                         sf_path, stockfish_elo, model_color, think_time))
+                         sf_path, stockfish_elo, model_color, think_time, i, queue))
+
+        # État d'affichage par partie
+        game_moves = {i: [] for i in range(n_games)}
+        game_done = set()
 
         game_results = [None] * n_games
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = {executor.submit(_play_game_worker, t): i
                       for i, t in enumerate(tasks)}
-            done_count = 0
-            for future in as_completed(futures):
-                idx = futures[future]
-                score, pgn, model_color = future.result()
-                game_results[idx] = (score, pgn, model_color)
-                done_count += 1
 
-                if score == 1.0:
-                    results["win"] += 1
-                    symbol = "✅"
-                elif score == 0.0:
-                    results["loss"] += 1
-                    symbol = "❌"
-                else:
-                    results["draw"] += 1
-                    symbol = "🤝"
+            import time as _tm
 
-                color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
-                win_rate = (results["win"] + results["draw"] * 0.5) / done_count * 100
-                print(f"  Partie {done_count:2d}/{n_games} │ {color_str:7s} │ {symbol} │ "
-                      f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L │ "
-                      f"Win rate: {win_rate:.0f}%")
+            while len(game_done) < n_games:
+                # Drainer la queue de coups
+                drained = False
+                while not queue.empty():
+                    try:
+                        gid, move_num, who, uci, game_over = queue.get_nowait()
+                        game_moves[gid].append(f"{who}{uci}")
+                        drained = True
+                    except Exception:
+                        break
+
+                if drained:
+                    # Afficher l'état de toutes les parties
+                    lines = []
+                    for gi in range(n_games):
+                        moves_str = " ".join(game_moves[gi][-8:])  # 8 derniers coups
+                        n_m = len(game_moves[gi])
+                        status = "✓" if gi in game_done else f"coup {n_m:3d}"
+                        color = "⬜" if gi % 2 == 0 else "⬛"
+                        lines.append(f"  {color} G{gi+1:02d} │ {status} │ {moves_str}")
+                    print("\033[2J\033[H")  # clear screen
+                    print(f"  ♟  Parties en cours ({len(game_done)}/{n_games} terminées)\n")
+                    for l in lines:
+                        print(l)
+                    sys.stdout.flush()
+
+                # Vérifier les futures terminées (non bloquant)
+                done_futures = [f for f in futures if f.done() and futures[f] not in game_done]
+                for future in done_futures:
+                    idx = futures[future]
+                    score, pgn, model_color = future.result()
+                    game_results[idx] = (score, pgn, model_color)
+                    game_done.add(idx)
+
+                    if score == 1.0:
+                        results["win"] += 1
+                    elif score == 0.0:
+                        results["loss"] += 1
+                    else:
+                        results["draw"] += 1
+
+                _tm.sleep(0.2)
+
+            # Affichage final
+            print(f"\n  ✅ Toutes les parties terminées")
+            for idx in range(n_games):
+                score, _, mc = game_results[idx]
+                symbol = "✅" if score == 1.0 else ("❌" if score == 0.0 else "🤝")
+                color = "⬜ Blancs" if mc == chess.WHITE else "⬛ Noirs"
+                n_m = len(game_moves[idx])
+                print(f"  G{idx+1:02d} │ {color} │ {symbol} │ {n_m} coups")
 
         for score, pgn, _ in game_results:
             scores.append(score)
             pgns.append(pgn)
     else:
+        import sys
         engine = chess.engine.SimpleEngine.popen_uci(sf_path)
         engine.configure({"UCI_LimitStrength": True, "UCI_Elo": max(stockfish_elo, 1350)})
 
         for i in range(n_games):
             model_color = chess.WHITE if i % 2 == 0 else chess.BLACK
-            color_str = "Blancs" if model_color == chess.WHITE else "Noirs"
+            color_str = "⬜ Blancs" if model_color == chess.WHITE else "⬛ Noirs"
+            moves_display = []
 
+            def _seq_cb(gid, move_num, who, uci, game_over):
+                moves_display.append(f"{who}{uci}")
+                tail = " ".join(moves_display[-10:])
+                print(f"\r  G{i+1:02d} │ {color_str} │ coup {move_num:3d} │ {tail}   ", end="")
+                sys.stdout.flush()
+
+            print(f"  G{i+1:02d} │ {color_str} │ début", end="")
             score, pgn = play_game(W1, b1, W2, b2, token_to_move, engine,
-                                   model_color, think_time=think_time)
+                                   model_color, think_time=think_time,
+                                   move_callback=_seq_cb, game_id=i)
             scores.append(score)
             pgns.append(pgn)
 
@@ -668,11 +727,9 @@ def run(model_path, n_games=10, stockfish_elo=800, think_time=0, n_workers=0):
                 results["draw"] += 1
                 symbol = "🤝"
 
-            total = i + 1
-            win_rate = sum(scores) / total * 100
-            print(f"  Partie {total:2d}/{n_games} │ {color_str:7s} │ {symbol} │ "
-                  f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L │ "
-                  f"Win rate: {win_rate:.0f}%")
+            n_m = len(moves_display)
+            print(f"\r  G{i+1:02d} │ {color_str} │ {symbol} │ {n_m} coups │ "
+                  f"Score: {results['win']}W-{results['draw']}D-{results['loss']}L")
 
         engine.quit()
 

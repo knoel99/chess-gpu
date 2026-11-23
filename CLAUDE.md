@@ -17,6 +17,8 @@ Dépendances : `pip install -r requirements.txt` (torch, python-chess, numpy, ma
 python -m unittest src.matrix_chess.test_engine -v          # tests moteur
 python -m unittest src.matrix_chess.test_retro -v           # tests rétrograde
 python -m unittest src.matrix_chess.test_reduced -v         # tests moteur réduit (équivalence avec les matrices 64×64)
+python -m unittest src.matrix_chess.test_reduced_gpu -v     # idem en PyTorch (cuda si disponible, sinon cpu)
+python -m src.matrix_chess.reduced_gpu [n_candidats]        # débit du moteur réduit PyTorch sur la machine
 python -m unittest src.matrix_chess.test_engine.TestKing -v # une classe de tests
 python -m src.matrix_chess.validate [n_games] [seed]        # validation croisée vs python-chess (coups légaux, nulles)
 python docs/rapport/gen_figures.py                          # régénère figs/ et exemples.tex du rapport (matplotlib)
@@ -36,6 +38,7 @@ Lire plusieurs fichiers pour comprendre le tout :
 
 - `engine.py` — cœur. Plateau `8×8` d'entiers signés (+1..+6 = pion..roi blancs, négatif = noirs, ligne 0 = rangée 8). Les masques d'attaque/mouvement sont faits uniquement de `shift` + opérations élémentaires, compatibles batch `(..., 8, 8)`. Chaque coup est une matrice `T ∈ Z^{64×64}` : `b' = T @ b` (`move_matrix`). `Game` porte l'état (trait, roque, en passant) ; `reverse_matrix` / `invert_game` défont les coups. Toute `T` est singulière (ligne `f` nulle) ; seule une prise perd de l'information. `Game.status()` ne connaît que mat/pat (retro et webapp en dépendent) ; les nulles automatiques (matériel insuffisant, 50 coups via `halfmove`, triple répétition via `history`) sont dans `Game.outcome()`, que la webapp n'utilise pas encore.
 - `reduced.py` — forme réduite, mêmes résultats que `move_matrix` / `T @ b` sans matrice 64×64. Plateaux `(N, 65)` (colonne sentinelle `NONE = 64` toujours nulle = « aucune case »), coups `(N, 6)` = `pack(moves)`, primitive unique `apply_moves`. L'opérateur cumulé `G_k` tient en deux plateaux d'étiquettes `(src, coef)` (`compose`, `to_dense`). `engine.py` garde les matrices denses, qui restent la référence.
+- `reduced_gpu.py` — même API que `reduced.py` en PyTorch (plateaux `int8`, un `gather` et un `scatter` par lot), plus le portage torch de `in_check` et `legal_mask`. Cible RTX PRO 6000 Blackwell (PyTorch ≥ 2.7 construit avec CUDA ≥ 12.8) ; jamais exécuté sur GPU à ce jour, seulement sur CPU. La génération pseudo-légale reste sur CPU.
 - `retro.py` — analyse rétrograde : sans cimetière l'inverse d'un coup est une *relation* (`b_prev = R·b + c·e_t`), les prises réapparaissent comme branches. Recherche par rencontre au milieu (préimages arrière ∩ coups légaux avant). Contient aussi les prédicats de condition finale.
 - `impose.py` — impose une condition finale arbitraire (prédicat `Game -> bool`) depuis n'importe quelle position : synthèse de plateaux finaux candidats autour du roi cible, puis reliaison par `retro.connect`.
 - `invert_full_game.py` — inversion exacte d'une partie complète (espace étendu 94).

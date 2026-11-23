@@ -231,3 +231,91 @@ def _uci(move):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _play(g, *ucis):
+    for u in ucis:
+        g.push(next(m for m in g.legal_moves() if _uci(m) == u))
+
+
+class TestAutomaticDraws(unittest.TestCase):
+    def test_insufficient_material_cases(self):
+        K, k = KING, -KING
+        cases = [
+            ([(7, 4, K), (0, 4, k)], True),                                  # R vs R
+            ([(7, 4, K), (0, 4, k), (4, 4, KNIGHT)], True),                  # R+C vs R
+            ([(7, 4, K), (0, 4, k), (4, 4, -BISHOP)], True),                 # R vs R+F
+            ([(7, 4, K), (0, 4, k), (4, 4, BISHOP), (3, 3, -BISHOP)], True),  # fous même couleur
+            ([(7, 4, K), (0, 4, k), (4, 4, BISHOP), (3, 4, -BISHOP)], False),  # couleurs opposées
+            ([(7, 4, K), (0, 4, k), (4, 4, KNIGHT), (3, 3, -KNIGHT)], False),
+            ([(7, 4, K), (0, 4, k), (4, 4, PAWN)], False),
+            ([(7, 4, K), (0, 4, k), (4, 4, ROOK)], False),
+            ([(7, 4, K), (0, 4, k), (4, 4, QUEEN)], False),
+        ]
+        for pieces, expected in cases:
+            g = Game(board_with(*pieces), castling="")
+            self.assertEqual(g.insufficient_material(), expected, pieces)
+
+    def test_halfmove_counter_resets(self):
+        g = Game()
+        _play(g, "g1f3", "g8f6", "f3g1")
+        self.assertEqual(g.halfmove, 3)
+        _play(g, "e7e5")          # poussée de pion
+        self.assertEqual(g.halfmove, 0)
+        _play(g, "e2e4", "f6e4")  # e2e4 remet à 0, la prise aussi
+        self.assertEqual(g.halfmove, 0)
+
+    def test_fifty_move_rule(self):
+        b = board_with((7, 4, KING), (0, 4, -KING), (7, 0, ROOK), (0, 7, -ROOK))
+        g = Game(b, castling="", halfmove=99)
+        self.assertFalse(g.fifty_moves())
+        _play(g, "a1a2")
+        self.assertTrue(g.fifty_moves())
+        self.assertEqual(g.outcome(), "fifty")
+
+    def test_checkmate_beats_fifty(self):
+        g = Game(halfmove=99)
+        _play(g, "f2f3", "e7e5", "g2g4", "d8h4")
+        g.halfmove = 100
+        self.assertEqual(g.outcome(), "checkmate")
+
+    def test_threefold_repetition(self):
+        g = Game()
+        cycle = ("g1f3", "g8f6", "f3g1", "f6g8")
+        _play(g, *cycle)
+        self.assertFalse(g.threefold())   # 2e occurrence
+        _play(g, *cycle)
+        self.assertTrue(g.threefold())    # 3e occurrence
+        self.assertEqual(g.outcome(), "threefold")
+
+    def test_castling_rights_distinguish_positions(self):
+        # même plateau mais droit de roque perdu puis retrouvé impossible : pas de 3e occurrence
+        g = Game()
+        _play(g, "g1f3", "g8f6", "h1g1", "h8g8", "g1h1", "g8h8")
+        self.assertEqual(g.history.count(g.history[-1]), 1)
+
+    def test_ep_square_ignored_when_not_capturable(self):
+        a, b = Game(), Game()
+        _play(a, "e2e4")                                  # ep_square e3 mais aucun pion noir adjacent
+        b.board = a.board.copy(); b.turn = a.turn; b.castling = a.castling
+        self.assertEqual(a.position_key(), b.position_key())
+
+    def test_matches_python_chess_on_random_games(self):
+        import random
+
+        import chess
+
+        from .engine import to_uci
+        rng = random.Random(3)
+        for _ in range(6):
+            ref, g = chess.Board(), Game()
+            for _ in range(200):
+                moves = sorted(m.uci() for m in ref.legal_moves)
+                if not moves:
+                    break
+                self.assertEqual(
+                    (g.halfmove, g.threefold(), g.insufficient_material()),
+                    (ref.halfmove_clock, ref.is_repetition(3), ref.is_insufficient_material()))
+                u = rng.choice(moves)
+                ref.push(chess.Move.from_uci(u))
+                g.push(next(m for m in g.legal_moves() if to_uci(m) == u))

@@ -23,7 +23,8 @@ def ref_to_matrix(ref):
     ep = None
     if ref.ep_square is not None and ref.has_legal_en_passant():
         ep = (7 - ref.ep_square // 8, ref.ep_square % 8)
-    return Game(b, turn=1 if ref.turn else -1, castling=castling, ep_square=ep)
+    return Game(b, turn=1 if ref.turn else -1, castling=castling, ep_square=ep,
+                halfmove=ref.halfmove_clock)
 
 
 def validate(n_games=50, seed=0, max_plies=200):
@@ -31,6 +32,7 @@ def validate(n_games=50, seed=0, max_plies=200):
     positions = 0
     for i in range(n_games):
         ref = chess.Board()
+        live = Game()  # suit la partie coup par coup : compteur et historique
         for _ in range(max_plies):
             g = ref_to_matrix(ref)
             ours = {to_uci(m) for m in g.legal_moves()}
@@ -46,10 +48,17 @@ def validate(n_games=50, seed=0, max_plies=200):
                ref.is_stalemate() != (status == "stalemate"):
                 print(f"VERDICT DIFFÉRENT partie {i}, fen {ref.fen()}: {status}")
                 return False
+            # nulles automatiques identiques
+            if (live.halfmove, live.threefold(), live.insufficient_material()) != \
+               (ref.halfmove_clock, ref.is_repetition(3), ref.is_insufficient_material()):
+                print(f"NULLE DIFFÉRENTE partie {i}, fen {ref.fen()}")
+                return False
             positions += 1
             if not theirs:
                 break
-            ref.push(chess.Move.from_uci(rng.choice(sorted(theirs))))
+            uci = rng.choice(sorted(theirs))
+            ref.push(chess.Move.from_uci(uci))
+            live.push(next(m for m in live.legal_moves() if to_uci(m) == uci))
     print(f"OK — {n_games} parties, {positions} positions, "
           f"ensembles de coups légaux 100% identiques à python-chess")
     return True

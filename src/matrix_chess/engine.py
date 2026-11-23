@@ -169,11 +169,25 @@ class Game:
         [4, 2, 3, 5, 6, 3, 2, 4],
     ], dtype=np.int64)
 
-    def __init__(self, board=None, turn=WHITE, castling="KQkq", ep_square=None):
+    def __init__(self, board=None, turn=WHITE, castling="KQkq", ep_square=None, halfmove=0):
         self.board = Game.START.copy() if board is None else np.asarray(board, dtype=np.int64)
         self.turn = turn
         self.castling = castling  # sous-ensemble de "KQkq"
         self.ep_square = ep_square  # (r, c) ou None
+        self.halfmove = halfmove  # demi-coups depuis la dernière prise / poussée de pion
+        self.history = [self.position_key()]  # clés des positions atteintes (répétition)
+
+    def position_key(self):
+        """Identité d'une position pour la répétition : plateau, trait, roques, en passant
+        (ce dernier seulement si un pion adverse peut réellement le prendre)."""
+        ep = None
+        if self.ep_square is not None:
+            r, c = self.ep_square
+            pr = r + (1 if self.turn == WHITE else -1)  # ligne du pion qui prendrait
+            if any(0 <= cc < 8 and self.board[pr, cc] == self.turn * PAWN for cc in (c - 1, c + 1)) \
+                    and any(m[3] is not None for m in self.legal_moves()):  # prise ep réellement légale
+                ep = self.ep_square
+        return (self.board.tobytes(), self.turn, "".join(sorted(self.castling)), ep)
 
     # --- génération ---
 
@@ -241,6 +255,7 @@ class Game:
         flat = self.board.reshape(64)
         piece, target = flat[f], flat[t]
         self.board = (T @ flat).reshape(8, 8)
+        self.halfmove = 0 if (abs(piece) == PAWN or target != 0 or ec is not None) else self.halfmove + 1
         fr, fc, tr, tc = f // 8, f % 8, t // 8, t % 8
         # droit en passant
         self.ep_square = ((fr + tr) // 2, fc) if abs(piece) == PAWN and abs(tr - fr) == 2 else None
@@ -252,6 +267,7 @@ class Game:
                 lost += right
         self.castling = "".join(ch for ch in self.castling if ch not in lost)
         self.turn = -self.turn
+        self.history.append(self.position_key())
         return T
 
     # --- verdicts ---
@@ -261,6 +277,53 @@ class Game:
         if self.legal_moves():
             return "ongoing"
         return "checkmate" if in_check(self.board, self.turn) else "stalemate"
+
+
+# ---------------------------------------------------------------------------
+# Nulles automatiques (hors pat) : masques de matériel, compteur, historique
+
+    def insufficient_material(self):
+        """Aucun camp ne peut mater : R vs R, R+minor vs R, ou fous tous de même couleur.
+
+        Matriciel : comptage par masques de `board`, couleur des cases de fou par
+        le masque d'échiquier (i + j) mod 2.
+        """
+        others = (self.board != 0) & (np.abs(self.board) != KING)
+        n = int(others.sum())
+        if n == 0:
+            return True
+        kinds = np.abs(self.board)[others]
+        if n == 1:
+            return int(kinds[0]) in (BISHOP, KNIGHT)
+        if (kinds == BISHOP).all():
+            parity = (np.add.outer(np.arange(8), np.arange(8)) % 2)[others]
+            return bool((parity == parity[0]).all())
+        return False
+
+    def threefold(self):
+        """La position courante est apparue au moins 3 fois."""
+        return self.history.count(self.history[-1]) >= 3
+
+    def fifty_moves(self):
+        """50 coups complets (100 demi-coups) sans prise ni poussée de pion."""
+        return self.halfmove >= 100
+
+    def outcome(self):
+        """Verdict complet : status() puis nulles automatiques.
+
+        'checkmate' | 'stalemate' | 'insufficient' | 'threefold' | 'fifty' | 'ongoing'.
+        Le mat prime sur les nulles par compteur (50 coups) comme chez FIDE.
+        """
+        st = self.status()
+        if st != "ongoing":
+            return st
+        if self.insufficient_material():
+            return "insufficient"
+        if self.threefold():
+            return "threefold"
+        if self.fifty_moves():
+            return "fifty"
+        return "ongoing"
 
 
 # ---------------------------------------------------------------------------

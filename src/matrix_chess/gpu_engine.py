@@ -316,8 +316,8 @@ class Searcher:
     donc bornée que par le temps, et une itération trop longue est interrompue à la pendule.
     """
 
-    def __init__(self, dev, chunk=None, qdepth=4):
-        self.dev = dev
+    def __init__(self, dev, chunk=None, qdepth=4, prune=False):
+        self.dev, self.prune = dev, prune
         self.chunk = chunk or (400_000 if dev == "cuda" else 20_000)
         self.qdepth = qdepth
         self.E = _eval_table(dev)
@@ -335,26 +335,75 @@ class Searcher:
             self.search(*from_game(g, self.dev), g.turn, budget=0.0, min_depth=3, max_depth=3)
             g.push(mv)
 
-    def value(self, B, cr, ep, color, ply, remaining, qleft):
-        """Valeurs negamax (N,) des positions, du point de vue du trait `color`."""
+    def value(self, B, cr, ep, color, ply, remaining, qleft, alpha=None, beta=None):
+        """Valeurs negamax (N,) des positions, du point de vue du trait `color`.
+
+        Avec self.prune : alpha-bêta par lots (fenêtres alpha, beta (N,), fail-soft). Chaque parent
+        cherche d'abord son fils aîné (meilleure évaluation statique), puis tous les cadets d'un coup,
+        avec la fenêtre resserrée, s'il n'est pas déjà coupé (Young Brothers Wait). En quiescence, le
+        stand pat coupe avant toute prise. La valeur est exacte si alpha < v < beta, sinon une borne du
+        bon côté ; sans self.prune, c'est le negamax pleine largeur exact.
+        """
+        inf, dev = float("inf"), B.device
+        alpha = torch.full((len(B),), -inf, device=dev) if alpha is None else alpha
+        beta = torch.full((len(B),), inf, device=dev) if beta is None else beta
         quiesce = remaining == 0
         if quiesce:
             stand = evaluate(B, color, self.E)
             if qleft == 0:
                 return stand
-        best = torch.full((len(B),), -float("inf"), device=B.device)
+            best = stand.clone()  # stand pat : le trait peut ne pas prendre
+        else:
+            best = torch.full((len(B),), -inf, device=dev)
+        live = best < beta
         for a, z in chunks(len(B), self.chunk):
             if time.perf_counter() > self.deadline:
                 raise Timeout
-            n, _, child, ccr, cep = expand(B[a:z], cr[a:z], ep[a:z], color, captures_only=quiesce)
+            idx = live[a:z].nonzero().squeeze(1) + a if self.prune else torch.arange(a, z, device=dev)
+            if not len(idx):
+                continue
+            n, _, child, ccr, cep = expand(B[idx], cr[idx], ep[idx], color, captures_only=quiesce)
             self.nodes += len(n)
-            if len(n):
-                v = self.value(child, ccr, cep, -color, ply + 1, max(remaining - 1, 0), qleft - quiesce)
-                best[a:z] = best[a:z].scatter_reduce(0, n, -v, "amax")
-        if quiesce:  # stand pat : le trait peut ne pas prendre
-            return torch.maximum(best, stand)
+            if not len(n):
+                continue
+            par = idx[n]
+            if self.prune and not quiesce:  # enfants groupés par parent, meilleur d'abord
+                o = evaluate(child, -color, self.E).argsort(stable=True)  # petit pour l'adversaire = bon pour nous
+                o = o[par[o].argsort(stable=True)]
+                par, child, ccr, cep = par[o], child[o], ccr[o], cep[o]
+                first = torch.ones_like(par, dtype=torch.bool)
+                first[1:] = par[1:] != par[:-1]
+                stages = [first, ~first]
+            else:
+                stages = [None]
+            for k, sel in enumerate(stages):
+                if sel is not None and k == 1:
+                    sel = sel & (best[par] < beta[par])  # cadets des parents non coupés
+                p, c, cc, ce = (par, child, ccr, cep) if sel is None else (par[sel], child[sel], ccr[sel], cep[sel])
+                if not len(p):
+                    continue
+                v = self.value(c, cc, ce, -color, ply + 1, max(remaining - 1, 0), qleft - quiesce,
+                               -beta[p], -torch.maximum(alpha[p], best[p]))
+                best = best.scatter_reduce(0, p, -v, "amax")
+        if quiesce:
+            return best
         chk = torch.cat([in_check(B[a:z], color) for a, z in chunks(len(B), 8_000_000)])
         return torch.where(torch.isinf(best), torch.where(chk, -MATE + ply, 0.0), best)  # mat ou pat
+
+    def root_scores(self, child, ccr, cep, color, depth, prev):
+        """Scores des coups racine. Avec self.prune : le meilleur coup de l'itération précédente
+        d'abord, fenêtre pleine, puis les autres d'un lot avec la fenêtre (-inf, -score du premier) :
+        leurs scores sont alors des bornes hautes, l'argmax reste exact."""
+        if not self.prune:
+            return -self.value(child, ccr, cep, -color, 1, depth - 1, self.qdepth)
+        o = prev.argsort(descending=True, stable=True)
+        s = torch.empty_like(prev)
+        s[o[:1]] = -self.value(child[o[:1]], ccr[o[:1]], cep[o[:1]], -color, 1, depth - 1, self.qdepth)
+        rest = o[1:]
+        if len(rest):
+            s[rest] = -self.value(child[rest], ccr[rest], cep[rest], -color, 1, depth - 1, self.qdepth,
+                                  torch.full((len(rest),), -float("inf"), device=prev.device), -s[o[0]].expand(len(rest)))
+        return s
 
     def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64):
         """Approfondit tant qu'on n'a pas dépassé `budget` et que l'itération suivante, prédite par le
@@ -366,6 +415,7 @@ class Searcher:
         if len(m) <= 1:
             return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
         self.nodes, best, info, last = len(m), None, {}, []
+        prev = -evaluate(child, -color, self.E)  # ordre des coups racine : évaluation statique, puis itération précédente
         for depth in range(1, max_depth + 1):
             if depth > min_depth and len(last) >= 1:  # coût prédit par le rapport des deux dernières durées
                 ratio = last[-1] / last[-2] if len(last) >= 2 and last[-2] > 0.02 else len(m)
@@ -374,14 +424,14 @@ class Searcher:
             t_iter = time.perf_counter()
             self.deadline = t0 + hard if depth > min_depth else float("inf")
             try:
-                score = -self.value(child, ccr, cep, -color, 1, depth - 1, self.qdepth)
+                score = self.root_scores(child, ccr, cep, color, depth, prev)
             except Timeout:
                 info["aborted"] = depth
                 break
             i = int(score.argmax())
             elapsed = time.perf_counter() - t0
             last.append(time.perf_counter() - t_iter)
-            best = to_move(m[i])
+            best, prev = to_move(m[i]), score
             info = dict(depth=depth, nodes=self.nodes, nps=self.nodes / max(elapsed, 1e-9),
                         score=float(score[i]), time=elapsed)
             if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget):

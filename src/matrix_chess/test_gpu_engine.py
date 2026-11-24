@@ -109,13 +109,24 @@ class TestGPUEngine(unittest.TestCase):
             want = max(-naive((b.push(m), b.fen(), b.pop())[1], 1, 1) for m in list(b.legal_moves))
             self.assertAlmostEqual(info["score"], want, places=3, msg=fen)
 
-    def test_search_mate_in_one_and_free_queen(self):
-        s = ge.Searcher(DEV)
-        for fen, want in [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),        # mat du couloir
-                          ("4k3/8/8/3q4/8/8/3R4/4K3 w - - 0 1", "d2d5")]:     # dame en prise
+    def test_pruned_search_same_score_as_full_width(self):
+        full, ab = ge.Searcher(DEV, qdepth=2), ge.Searcher(DEV, qdepth=2, prune=True)
+        for fen, _ in PERFT + [("r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8", None)]:
             B, cr, ep, color = state(fen)
-            move, info = s.search(B, cr, ep, color, budget=5.0, min_depth=2, max_depth=3)
-            self.assertEqual(to_uci(move), want, (fen, info))
+            for d in (2, 3):
+                _, f = full.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
+                _, p = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
+                self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d))
+                self.assertLessEqual(p["nodes"], f["nodes"], (fen, d))
+
+    def test_search_mate_in_one_and_free_queen(self):
+        cases = [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),     # mat du couloir
+                 ("4k3/8/8/3q4/8/8/3R4/4K3 w - - 0 1", "d2d5")]     # dame en prise
+        for s in (ge.Searcher(DEV), ge.Searcher(DEV, prune=True)):
+            for fen, want in cases:
+                B, cr, ep, color = state(fen)
+                move, info = s.search(B, cr, ep, color, budget=5.0, min_depth=2, max_depth=3)
+                self.assertEqual(to_uci(move), want, (fen, info))
 
 
 if __name__ == "__main__":

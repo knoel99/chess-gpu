@@ -1,0 +1,7 @@
+serie,parties,ours_precision,ours_perte_cp,ours_perte_gain,ours_imprecisions_par_partie,ours_erreurs_par_partie,ours_gaffes_par_partie,sf_precision,sf_perte_cp,sf_perte_gain,sf_imprecisions_par_partie,sf_erreurs_par_partie,sf_gaffes_par_partie
+v1-torch,14,91.5,40.6,2.58,3.5,1.57,1.36,93.5,30.0,2.04,2.57,1.07,1.14
+v2-noyau-temps,14,92.3,38.2,2.33,5.14,1.71,0.93,93.4,32.1,2.01,4.43,0.93,1.07
+v4-plein-ucielo,14,91.7,37.6,2.5,3.43,1.21,1.29,93.0,30.7,2.12,3.0,1.21,0.93
+v4-hybride-ucielo,4,87.3,72.5,4.06,2.0,0.5,1.5,94.7,20.2,1.46,1.0,0.5,0.0
+v4b-hybride-ucielo-corrige,14,93.5,27.1,1.85,2.86,1.5,0.5,93.7,27.6,1.84,3.07,1.07,0.93
+v4-hybride-machine,2,93.5,36.0,1.8,3.0,0.0,0.5,98.7,7.4,0.39,0.5,0.0,0.0

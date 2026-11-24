@@ -28,8 +28,8 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "..", "results", "matrix_che
 def our_move(searcher, board, clock):
     g = ref_to_matrix(board)
     B, cr, ep = ge.from_game(g, searcher.dev)
-    budget = clock / 30  # partie supposée de ~30 coups restants, pas d'incrément
-    move, info = searcher.search(B, cr, ep, g.turn, budget)
+    # ~30 coups restants supposés, pas d'incrément ; une itération prédite peut aller jusqu'à clock / 10
+    move, info = searcher.search(B, cr, ep, g.turn, clock / 30, hard=clock / 10)
     return chess.Move.from_uci(to_uci(move)), info
 
 
@@ -84,6 +84,7 @@ def main():
     ap.add_argument("--clock", type=float, default=180.0)
     ap.add_argument("--threads", type=int, default=1, help="threads Stockfish")
     ap.add_argument("--qdepth", type=int, default=4)
+    ap.add_argument("--tag", default="", help="étiquette de la série, recopiée dans chaque résultat")
     ap.add_argument("--stop-after", type=int, default=0, help="arrêter après N niveaux sans point marqué")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -91,6 +92,7 @@ def main():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
     def log(rec):
+        rec["tag"] = a.tag
         print(json.dumps({k: v for k, v in rec.items() if k != "pgn_moves"}), flush=True)
         with open(OUT, "a") as f:
             f.write(json.dumps(rec) + "\n")

@@ -333,8 +333,12 @@ class Searcher:
             self.search(*from_game(g, self.dev), g.turn, budget=0.0, min_depth=3, max_depth=3)
             g.push(mv)
 
-    def search(self, B, cr, ep, color, budget, min_depth=1, max_depth=64):
+    def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64):
+        """Approfondit tant que l'itération suivante, prédite par le rapport des durées des deux
+        dernières, finit avant `hard` (défaut 3 × budget) et qu'on n'a pas dépassé `budget`."""
         t0 = time.perf_counter()
+        hard = 3 * budget if hard is None else hard
+        prev_iter, prev_iter_time, seen = None, 0.0, 0
         sync = torch.cuda.synchronize if self.dev == "cuda" else (lambda: None)
 
         def side(ply):
@@ -365,15 +369,19 @@ class Searcher:
                 levels.append(dict(q, stand=evaluate(qb, -c, self.E), quiesce=True))
             score = -root_values(levels)
             sync()
-            elapsed = time.perf_counter() - t0
+            now = time.perf_counter()
+            elapsed, iter_time, seen = now - t0, now - t0 - (prev_iter or 0), seen + total
             i = int(score.argmax())
             best = to_move(root_moves[i])
-            info = dict(depth=depth, nodes=total, nps=total / max(elapsed, 1e-9), score=float(score[i]),
+            info = dict(depth=depth, nodes=seen, nps=seen / max(elapsed, 1e-9), score=float(score[i]),
                         time=elapsed)
             full.append(full_level(dict(B=child, cr=ccr, ep=cep, parent=n), depth))
             growth = len(child) / max(len(nodes["B"]), 1)
-            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed * (1 + growth) > budget
-                                       or len(child) * growth > self.max_nodes):
+            ratio = iter_time / prev_iter_time if prev_iter and prev_iter_time > 0.02 else growth
+            predicted = iter_time * max(ratio, 2.0)
+            prev_iter, prev_iter_time = elapsed, iter_time
+            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget
+                                       or elapsed + predicted > hard or len(child) * growth > self.max_nodes):
                 break
         return best, info
 

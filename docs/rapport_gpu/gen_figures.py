@@ -24,6 +24,11 @@ FIGS = os.path.join(HERE, "figs")
 C = ["#2a78d6", "#eb6834", "#1baf7a"]
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 SERIES = [("v1-torch", "v1 : torch"), ("v2-noyau-temps", "v2 : noyau CUDA"), ("v3-recursif", "v3 : récursive")]
+# conditions de calibration UCI_Elo (60 s + 0,6 s) ; la série hybride d'avant le correctif de racine en est exclue
+UCI = [("v4-plein-ucielo", "pleine largeur"), ("v4b-hybride-ucielo-corrige", "alpha-bêta hybride")]
+# axe des catégories de la figure vitesse/profondeur
+SPEED = SERIES + [("v4-plein-ucielo", "v4 : plein"), ("v4b-hybride-ucielo-corrige", "v4 : hybride"),
+                  ("v4-hybride-machine", "v4 : SF machine")]
 ELOS = ["1320", "1500", "1700", "1900", "2200", "2500", "max"]
 
 plt.rcParams.update({"font.size": 9, "axes.edgecolor": MUTED, "axes.labelcolor": INK, "xtick.color": MUTED,
@@ -42,41 +47,44 @@ def matches():
     return list(csv.DictReader(open(os.path.join(RES, "summary.csv"))))
 
 
-def fig_scores(rows):
+def fig_scores(rows, series=SERIES, name="scores.pdf"):
     pts = defaultdict(float)
     played = set()
     for r in rows:
         pts[(r["tag"], r["elo"])] += float(r["our_score"])
         played.add((r["tag"], r["elo"]))
     fig, ax = plt.subplots(figsize=(6.2, 2.6))
-    w = 0.26
-    for k, (tag, label) in enumerate(SERIES):
-        xs = [i + (k - 1) * w for i, e in enumerate(ELOS) if (tag, e) in played]
+    w = 0.78 / len(series)
+    for k, (tag, label) in enumerate(series):
+        off = (k - (len(series) - 1) / 2) * w
+        xs = [i + off for i, e in enumerate(ELOS) if (tag, e) in played]
         ys = [pts[(tag, e)] for e in ELOS if (tag, e) in played]
         ax.bar(xs, [max(y, 0.04) for y in ys], width=w - 0.03, color=C[k], label=label)
     ax.set_xticks(range(len(ELOS)), [f"SF {e}" for e in ELOS])
     ax.set_ylabel("points sur 2 parties")
     ax.set_ylim(0, 2.2)
-    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0))
-    save(fig, "scores.pdf")
+    ax.legend(ncol=len(series), loc="lower center", bbox_to_anchor=(0.5, 1.0))
+    save(fig, name)
 
 
 def fig_speed_depth(rows):
-    fig, axes = plt.subplots(1, 2, figsize=(6.4, 2.6))
-    for k, (tag, label) in enumerate(SERIES):
+    series = [(t, l) for t, l in SPEED if any(r["tag"] == t for r in rows)]
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.8))
+    for k, (tag, label) in enumerate(series):
         g = [r for r in rows if r["tag"] == tag]
-        axes[0].scatter([k - 0.12] * len(g), [float(r["ours_nps"]) for r in g], s=14, color=C[0],
+        axes[0].scatter([k - 0.15] * len(g), [float(r["ours_nps"]) for r in g], s=12, color=C[0],
                         label="notre moteur" if k == 0 else None)
-        axes[0].scatter([k + 0.12] * len(g), [float(r["sf_nps"]) for r in g], s=14, color=C[1],
-                        label="Stockfish 16, 1 thread" if k == 0 else None)
-        axes[1].scatter([k - 0.12] * len(g), [float(r["ours_depth"]) for r in g], s=14, color=C[0])
-        axes[1].scatter([k + 0.12] * len(g), [float(r["sf_depth"]) for r in g], s=14, color=C[1])
+        axes[0].scatter([k + 0.15] * len(g), [float(r["sf_nps"]) for r in g], s=12, color=C[1],
+                        label="Stockfish 16" if k == 0 else None)
+        axes[1].scatter([k - 0.15] * len(g), [float(r["ours_depth"]) for r in g], s=12, color=C[0])
+        axes[1].scatter([k + 0.15] * len(g), [float(r["sf_depth"]) for r in g], s=12, color=C[1])
     for ax in axes:
-        ax.set_xticks(range(3), [s[1].split(" : ")[0] for s in SERIES])
+        ax.set_xticks(range(len(series)), [l.replace(" : ", "\n") for _, l in series], fontsize=7)
     axes[0].set_yscale("log")
     axes[0].set_ylabel("nœuds par seconde (moyenne par partie)")
     axes[1].set_ylabel("profondeur moyenne (demi-coups)")
-    axes[0].legend(loc="center right", fontsize=7.5)
+    fig.legend(*axes[0].get_legend_handles_labels(), ncol=2, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+               fontsize=7.5)
     fig.tight_layout()
     save(fig, "vitesse_profondeur.pdf")
 
@@ -146,6 +154,12 @@ def write_table(name, header, rows, align):
 
 
 def tables(rows):
+    score_table([r for r in rows if r["tag"] in dict(SERIES)], "scores.tex")
+    score_table([r for r in rows if r["tag"].startswith("v4")], "scores_v4.tex")
+    ab_tables()
+
+
+def score_table(rows, name):
     tags = list(dict.fromkeys(r["tag"] for r in rows))
     pts, n = defaultdict(float), defaultdict(int)
     for r in rows:
@@ -159,8 +173,10 @@ def tables(rows):
         body.append([t.replace("_", "\\_")] + cells + [f"{fr(tot, 'g')}/{sum(n[(t, e)] for e in ELOS)}",
                      sci(median(float(r['ours_nps']) for r in g), 1), fr(median(float(r['ours_depth']) for r in g), '.1f'),
                      f"{median(float(r['sf_depth']) for r in g):.0f}"])
-    write_table("scores.tex", ["série"] + ELOS + ["total", "nœuds/s", "prof.", "prof. SF"], body, "l" + "c" * 7 + "rrrr")
+    write_table(name, ["série"] + ELOS + ["total", "nœuds/s", "prof.", "prof. SF"], body, "l" + "c" * 7 + "rrrr")
 
+
+def ab_tables():
     ab = list(csv.DictReader(open(os.path.join(RES, "ab_gpu.csv"))))
     pos = list(dict.fromkeys(r["pos"] for r in ab))
     variants = ["pleine", "ybw", "hybride", "1-2-4"]
@@ -191,7 +207,8 @@ def tables(rows):
 
 if __name__ == "__main__":
     rows = matches()
-    fig_scores(rows)
+    fig_scores([r for r in rows if r["tag"] in dict(SERIES)])
+    fig_scores(rows, UCI, "scores_ucielo.pdf")
     fig_speed_depth(rows)
     fig_perft()
     fig_ab()

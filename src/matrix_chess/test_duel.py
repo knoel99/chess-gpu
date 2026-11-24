@@ -17,7 +17,7 @@ class TestDuel(unittest.TestCase):
         self.assertGreater(hi, 0)
         e75, _, _ = elo(150, 200, 0.2)
         self.assertAlmostEqual(e75, 190.8, places=1)  # 75 % de score ≈ +191 Elo
-        _, lo2, hi2 = elo(100, 800, 0.2)
+        _, lo2, hi2 = elo(400, 800, 0.2)
         self.assertLess(hi2 - lo2, hi - lo)  # plus de parties, intervalle plus étroit
 
 

@@ -10,7 +10,7 @@ Les documents de théorie, qui restent des références vivantes, demeurent dans
 | 2026-02-15 | Phase 1 : imitation des GM par un MLP | [`2026-02-15_phase1-mlp/`](2026-02-15_phase1-mlp/) | [`results.md`](2026-02-15_phase1-mlp/results.md) |
 | 2026-11-23 | Rapport sur le moteur matriciel (générateur de figures seul) | [`2026-11-23_rapport-moteur-matriciel/`](2026-11-23_rapport-moteur-matriciel/) | source LaTeX absente du dépôt |
 | 2026-11-24 | Incrément 1 : moteur matriciel sur GPU, alpha-bêta par lots, matchs contre Stockfish | [`2026-11-24_increment1-gpu/`](2026-11-24_increment1-gpu/) | [`rapport_gpu.pdf`](2026-11-24_increment1-gpu/rapport_gpu.pdf) |
-| à venir | Incrément 2 : tri des coups, vagues adaptatives, temps, filtre de qualité, matchs statistiques | `2026-11-2x_increment2-…/` | en cours |
+| 2026-11-24 | Incrément 2 : qualité coup par coup, tri des coups, vagues adaptatives, pendule, duel de 200 parties | [`2026-11-24_increment2/`](2026-11-24_increment2/) | [`rapport_inc2.pdf`](2026-11-24_increment2/rapport_inc2.pdf) |
 
 Documents de théorie, par date de création : [`docs/model.md`](../model.md) et
 [`docs/king_matrix.md`](../king_matrix.md) (2026-02-15), [`docs/matrix_chess.md`](../matrix_chess.md)
@@ -107,3 +107,46 @@ parties rejouées et vérifiées. Les coups des 8 parties v3 ont été perdus av
 `python docs/etudes/2026-11-24_increment1-gpu/gen_figures.py`.
 
 Les nouvelles mesures repartent dans `results/matrix_chess/`, écrites par `match.py`.
+
+---
+
+## 2026-11-24 — Incrément 2 : qualité, tri, vagues, pendule
+
+**Questions.** Où nos coups perdent-ils de la valeur au fil des parties ? Le plan de l'incrément 1
+(tri des coups, vagues adaptatives, gestion du temps, filtre de qualité) rend-il le moteur plus fort,
+et de combien, statistiquement ?
+
+**Méthode.** Trois agents Fable ont travaillé en parallèle, chacun dans une copie isolée du dépôt :
+- A : analyse coup par coup par Stockfish, à la Lichess, et filtre de qualité ;
+- B : tri MVV/LVA et vagues adaptatives, mis au point sur GPU ;
+- C : plafond de pendule avec résultat partiel sûr, refus de la répétition et journal par coup.
+
+Leurs travaux ont été intégrés, et 21 tests passent sur CPU et GPU. La validation s'est faite sur
+une RTX PRO 6000 : filtre de qualité sur 100 positions, puis duel de 200 parties en 10 s + 0,1 s
+contre l'alpha-bêta de l'incrément 1, avec ouvertures appariées et couleurs inversées.
+
+**Résultats.**
+
+| Mesure | Valeur |
+|---|---|
+| Analyse des 62 parties de l'incrément 1 | nos coups se dégradent aux coups 11 à 20 (56 cp, 5 % de gaffes) ; coup décisif au coup 10 en médiane, de nous 35 fois sur 36 |
+| Tri MVV/LVA et vagues adaptatives | Gambit-Dame en profondeur 6 : de 21 s à 1,1 s ; ×1,5 à ×2 sur 4 positions sur 5 |
+| Filtre de qualité, 1 s par coup | perte moyenne de 35,9 à 29,6 cp ; coups à ≥ 100 cp de 12 % à 8 % |
+| **Duel de 200 parties** | **67,5 %, soit +127 Elo [+90 ; +167]** ; 96 victoires, 78 nulles, 26 défaites |
+
+**Ce qu'elle a appris.** Le tri des coups vaut plus que le découpage en vagues. Le résultat partiel
+suffit à tenir la pendule, puisqu'aucun prédicteur de coût n'est fiable. Les parties se perdent à
+la sortie de l'ouverture.
+
+**Laissé ouvert, et repris par l'incrément 3.**
+1. Mesurer l'Elo contre Stockfish en conditions de calibration.
+2. Renforcer le jeu aux coups 11 à 20, par l'évaluation ou un livre d'ouvertures.
+3. Une table de transposition sur GPU.
+4. L'élagage non exact (LMR, coup nul), validé par duel.
+5. Le volet rétrograde.
+
+**Données figées.** `donnees/` contient la synthèse des 200 parties du duel, leur analyse Stockfish
+par partie et les trois filtres. Les coups des parties du duel n'ont pas été rapatriés.
+`analyse/` contient l'analyse coup par coup des 62 parties de l'incrément 1, et `recherche/` les
+mesures de tri et de vagues sur GPU.
+

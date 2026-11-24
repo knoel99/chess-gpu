@@ -22,7 +22,7 @@ import torch
 
 from . import gpu_engine as ge
 from .engine import to_uci
-from .match import STOCKFISH
+from .match import STOCKFISH, key
 from .validate import ref_to_matrix
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "..", "results", "matrix_chess", "duel.jsonl")
@@ -62,14 +62,13 @@ def jouer(moteurs, debut, clock, inc):
     for u in debut:
         board.push_uci(u)
     clocks = {chess.WHITE: clock, chess.BLACK: clock}
-    journal = []
+    journal, seen = [], {key(board)}  # positions déjà vues : chaque moteur évite de répéter quand il mène
     while not board.is_game_over(claim_draw=True):
         s = moteurs[board.turn]
         g = ref_to_matrix(board)
         B, cr, ep = ge.from_game(g, s.dev)
         t0 = time.perf_counter()
-        move, info = s.search(B, cr, ep, g.turn, clocks[board.turn] / 30 + 0.8 * inc,
-                              hard=clocks[board.turn] / 10 + inc)
+        move, info = s.search(B, cr, ep, g.turn, clocks[board.turn] / 30 + 0.8 * inc, history=seen)
         dt = time.perf_counter() - t0
         clocks[board.turn] -= dt
         if clocks[board.turn] <= 0:
@@ -77,8 +76,10 @@ def jouer(moteurs, debut, clock, inc):
         clocks[board.turn] += inc
         uci = to_uci(move)
         journal.append(dict(coup=uci, score=info.get("score"), depth=info.get("depth"), nodes=info.get("nodes"),
-                            temps=round(dt, 3), pendule=round(clocks[board.turn], 2)))
+                            temps=round(dt, 3), pendule=round(clocks[board.turn], 2),
+                            **{k: info[k] for k in ("partial", "aborted") if k in info}))
         board.push_uci(uci)
+        seen.add(key(board))
     out = board.outcome(claim_draw=True)
     return out.result(), out.termination.name.lower(), board, journal
 

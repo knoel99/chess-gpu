@@ -1,2 +1,26 @@
-\subsection*{Avocat du diable}
-Rapport en attente.
+\subsection*{L'avocat du diable : qu'est-ce qui limite vraiment la force ?}
+Le troisième agent a construit un émulateur séquentiel du \code{Searcher} sur python-chess, avec
+la même évaluation et la même quiescence. Sur 36 cas sur 36, il rend la même valeur racine. Il
+prend ensuite Stockfish~16 en profondeur 14 comme juge.
+\begin{itemize}
+\item \textbf{La profondeur est le facteur limitant.} Sur 36 positions tirées des parties, la
+perte moyenne du coup choisi vaut 71~cp en profondeur 4, 57 en 5, 53 en 6, 23 en 7 et 20 en 8.
+Les coups qui perdent au moins 100~cp passent de 6 à 0 entre les profondeurs 4 et 7. Le coup racine
+change encore dans 10 positions sur 36 entre les profondeurs 6 et 7 : rien n'a convergé à la
+profondeur jouée.
+\item \textbf{Les gaffes} (27 coups perdant au moins 200~cp) disparaissent en grande partie avec
+la profondeur : il en reste 10 sur 27 en profondeur 6, et 1 sur 5 en profondeur 8.
+\item \textbf{Le reste pèse moins.} 18 des 20 parties perdues basculent en milieu de partie, avec
+21 à 30 pièces sur l'échiquier. La triple répétition n'a coûté qu'un demi-point. 7 défaites sur 19
+viennent d'une dérive lente, sans gaffe, que l'on ne sait pas séparer de l'évaluation.
+\item \textbf{Le temps de pendule non utilisé compte peu en pleine largeur.} Doubler le temps n'y
+rapporte que 0{,}2 demi-coup, avec un facteur de branchement mesuré de 35{,}5.
+\item \textbf{Ce que le lot garde du gain de l'alpha-bêta.} Avec $10^9$ nœuds par coup, la pleine
+largeur atteint 5{,}8 demi-coups, le lot naïf 7{,}4 à 8{,}0, et l'alpha-bêta séquentiel 11{,}2.
+Le lot garde donc 30 à 40~\% du gain. Il égale à peu près un alpha-bêta séquentiel sur un cœur
+CPU : objectif sain comme objet d'étude, pas comme chemin le plus court vers l'Elo.
+\item \textbf{Protocole statistique.} L'erreur type vaut environ $347/\sqrt N$ Elo, soit $\pm49$
+Elo à 95~\% pour 200 parties. Deux parties par niveau ne concluent rien. Il faut un match
+« nouveau contre ancien » de 200 parties, avec ouvertures appariées et couleurs inversées, puis
+50 parties contre Stockfish à 1500, 1700 et 1900.
+\end{itemize}

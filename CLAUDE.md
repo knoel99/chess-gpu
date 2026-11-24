@@ -24,8 +24,8 @@ python -m unittest src.matrix_chess.test_gpu_engine -v      # génération GPU :
 python -m src.matrix_chess.bench_gpu [profondeur] [chunk]   # perft GPU contre `go perft` de Stockfish
 python -m src.matrix_chess.match --elos 1320,1500,max       # matchs 3+0 contre Stockfish bridé (results/matrix_chess/)
 python -m src.matrix_chess.validate [n_games] [seed]        # validation croisée vs python-chess (coups légaux, nulles)
-python docs/rapport/gen_figures.py                          # régénère figs/ et exemples.tex du rapport (matplotlib)
-cd docs/rapport && latexmk -pdf rapport.tex                 # compile le rapport LaTeX (latexmk -c pour nettoyer)
+python docs/etudes/2026-11-24_increment1-gpu/gen_figures.py # régénère figures et tableaux du rapport de l'incrément 1
+cd docs/etudes/2026-11-24_increment1-gpu && latexmk -pdf rapport_gpu.tex  # compile ce rapport (latexmk -c pour nettoyer)
 python -m src.matrix_chess.webapp                           # UI web → http://127.0.0.1:8000
 
 # Phases réseaux (scripts directs, pas des modules)
@@ -44,7 +44,7 @@ Lire plusieurs fichiers pour comprendre le tout :
 - `reduced_gpu.py` — même API que `reduced.py` en PyTorch (plateaux `int8`, un `gather` et un `scatter` par lot), plus le portage torch de `in_check` et `legal_mask`. Cible RTX PRO 6000 Blackwell (PyTorch ≥ 2.7 construit avec CUDA ≥ 12.8) ; jamais exécuté sur GPU à ce jour, seulement sur CPU. La génération pseudo-légale reste sur CPU.
 - `gpu_engine.py` — génération de coups légaux par lots entièrement sur GPU (70 plans de coups par shifts, test d'échec depuis le roi), `perft`, et `Searcher` : negamax pleine largeur + quiescence (prises MVV/LVA), récursif par lots (mémoire bornée), interrompu à la pendule. `expand_torch` est la référence et le repli CPU.
 - `gpu_kernels.py` — noyau CUDA fusionné (CuPy/nvrtc, `pip install cupy-cuda12x`) pour `expand` : même résultat et même ordre que `expand_torch`, ~10× plus rapide. Sans CuPy le repli torch est silencieux.
-- `match.py` / `bench_gpu.py` — matchs contre Stockfish (`UCI_LimitStrength`) et banc perft ; résumés dans `results/matrix_chess/summary.csv`.
+- `match.py` / `bench_gpu.py` — matchs contre Stockfish (`UCI_LimitStrength`) et banc perft ; résultats bruts dans `results/matrix_chess/matches.jsonl`.
 - `retro.py` — analyse rétrograde : sans cimetière l'inverse d'un coup est une *relation* (`b_prev = R·b + c·e_t`), les prises réapparaissent comme branches. Recherche par rencontre au milieu (préimages arrière ∩ coups légaux avant). Contient aussi les prédicats de condition finale.
 - `impose.py` — impose une condition finale arbitraire (prédicat `Game -> bool`) depuis n'importe quelle position : synthèse de plateaux finaux candidats autour du roi cible, puis reliaison par `retro.connect`.
 - `invert_full_game.py` — inversion exacte d'une partie complète (espace étendu 94).
@@ -55,5 +55,6 @@ Lire plusieurs fichiers pour comprendre le tout :
 
 - Les phases 1/2 ajoutent leur dossier au `sys.path` à la main (`REPO_ROOT`/`DATA_DIR`) : les lancer par chemin de script, pas en `-m`. `matrix_chess` au contraire utilise des imports relatifs : toujours `python -m` depuis la racine.
 - `Game(...)` copié à la main (`Game(g.board.copy(), g.turn, ...)`) repart avec un historique et un `halfmove` vierges : passer `halfmove=` si le compteur compte.
-- Pas de venv ni de lanceur de tests dans le dépôt : installer `requirements.txt` avant `unittest`. Le rapport (`docs/rapport/`) est écrit en LaTeX ; `exemples.tex` et `figs/` sont générés, ne pas les éditer à la main.
-- Résultats/articles de la phase 1 dans `results/phase1_mlp/`.
+- Pas de venv ni de lanceur de tests dans le dépôt : installer `requirements.txt` avant `unittest`.
+- Études archivées par date dans `docs/etudes/` (journal chronologique : `docs/etudes/README.md`) : chaque dossier daté garde son rapport, ses figures et ses données figées (`donnees/`). Figures et tableaux sont générés par le `gen_figures.py` du dossier, ne pas les éditer à la main. Une nouvelle étude = un nouveau dossier `AAAA-MM-JJ_nom/` et une entrée dans le journal.
+- Mesures en cours (matchs) : `results/matrix_chess/`, écrit par `match.py` ; on les fige dans le dossier de l'étude quand elle se clôt.

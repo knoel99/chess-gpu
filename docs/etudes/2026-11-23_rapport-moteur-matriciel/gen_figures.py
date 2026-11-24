@@ -1,7 +1,7 @@
-"""Génère figures (docs/rapport/figs/*.pdf) et exemples chiffrés (docs/rapport/exemples.tex)
+"""Génère les figures (figs/*.pdf) et les exemples chiffrés (exemples.tex) du rapport, à côté de ce script,
 à partir du vrai moteur : toutes les valeurs affichées sont calculées, jamais recopiées.
 
-Lancer depuis la racine : venv/bin/python -m docs.rapport.gen_figures  (ou python docs/rapport/gen_figures.py)
+Lancer depuis la racine : python docs/etudes/2026-11-23_rapport-moteur-matriciel/gen_figures.py
 """
 
 import os
@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 from src.matrix_chess.engine import (Game, move_matrix, piece_moves,  # noqa: E402
                                      reverse_matrix, to_uci)
 

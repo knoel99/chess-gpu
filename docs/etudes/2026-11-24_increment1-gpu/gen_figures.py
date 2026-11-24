@@ -1,9 +1,9 @@
-"""Figures (docs/rapport_gpu/figs/*.pdf) et tableaux (docs/rapport_gpu/tables/*.tex) du rapport GPU,
-calculés depuis results/matrix_chess/ : aucune valeur recopiée à la main.
+"""Figures (figs/*.pdf) et tableaux (tables/*.tex) du rapport de l'incrément 1, calculés depuis
+les données figées de l'étude (donnees/) : aucune valeur recopiée à la main.
 Sources :
 summary.csv (matchs), ab_gpu.csv (alpha-bêta contre pleine largeur), perft_gpu.csv (perft).
 
-Lancer depuis la racine : python docs/rapport_gpu/gen_figures.py
+Lancer depuis la racine : python docs/etudes/2026-11-24_increment1-gpu/gen_figures.py
 """
 
 import csv
@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RES = os.path.join(HERE, "..", "..", "results", "matrix_chess")
+RES = os.path.join(HERE, "donnees")
 FIGS = os.path.join(HERE, "figs")
 # palette catégorielle de référence (skill dataviz), trois premiers emplacements, ordre fixe
 C = ["#2a78d6", "#eb6834", "#1baf7a"]

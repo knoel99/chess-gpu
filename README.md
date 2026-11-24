@@ -21,7 +21,7 @@ docs/                    # documentation théorique (matrices, modèle)
 Réseau dense 832→1024→512→256→N entraîné sur 208k parties de 10 GMs.
 - **Top-1 accuracy** : 24.8% — **Top-5** : 52.5%
 - **Elo estimé** : ~838–950 vs Stockfish 1350
-- 📄 [Résultats détaillés](results/phase1_mlp/results.md)
+- 📄 [Résultats détaillés](docs/etudes/2026-02-15_phase1-mlp/results.md)
 
 ## Phase 2 — Transformer
 

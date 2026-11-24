@@ -341,10 +341,10 @@ de la convergence vers une position finale imposée.
 GPU.
 \item Perft : \code{python -m src.matrix\_chess.bench\_gpu 6}.
 \item Matchs : \code{python -m src.matrix\_chess.match --prune --waves hybride --preset uci-elo}.
-\item Données : \code{results/\allowbreak matrix\_chess/} (\code{summary.csv}, \code{games.txt},
+\item Données, figées avec l'étude : \code{donnees/} (\code{summary.csv}, \code{games.txt},
 \code{ab\_gpu.csv}, \code{perft\_gpu.csv}). Les 62 parties de \code{games.txt} sont rejouées
 avec python-chess et conformes au résumé. Les coups de la série v3 sont perdus.
-\item Figures et tableaux : \code{python docs/rapport\_gpu/gen\_figures.py}.
+\item Figures et tableaux : \code{python docs/etudes/2026-11-24\_increment1-gpu/gen\_figures.py}.
 \end{itemize}
 Les pods Runpod RTX PRO 6000 coûtent 2{,}69~\$/h en cloud sécurisé. Le coût total de
 l'incrément est de 12{,}27~\$ : le solde est passé de 65{,}20 à 52{,}93~\$. Tous les pods ont été

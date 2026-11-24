@@ -24,3 +24,16 @@ Elo à 95~\% pour 200 parties. Deux parties par niveau ne concluent rien. Il fau
 « nouveau contre ancien » de 200 parties, avec ouvertures appariées et couleurs inversées, puis
 50 parties contre Stockfish à 1500, 1700 et 1900.
 \end{itemize}
+
+\noindent\textbf{Après les mesures GPU et le bug de racine,} l'agent maintient son diagnostic.
+Son émulateur ne remplaçait le meilleur coup que sur une valeur strictement supérieure, donc
+exacte, et n'avait pas ce bug. Il propose un protocole en trois étages.
+\begin{enumerate}
+\item Un filtre déterministe de quelques minutes : la perte Stockfish du coup choisi sur 300
+positions, à budget de temps fixe, en comparant les deux recherches. Ce filtre aurait attrapé le
+bug avant tout match.
+\item Un invariant en test : le score exact du coup joué doit égaler le score racine. Ce test est
+désormais dans \code{test\_gpu\_engine}.
+\item Un match direct de 200 parties, à $\pm49$ Elo, puis 50 parties par niveau contre Stockfish.
+\end{enumerate}
+Avec 2 parties, l'erreur type est d'environ $\pm245$ Elo.

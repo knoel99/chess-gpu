@@ -27,3 +27,11 @@ v2-noyau-temps,2500,white,0-1,checkmate,80,0.0,4.3,2.13e8,51.9,2.71e6,151.0,34.2
 v2-noyau-temps,2500,black,1-0,checkmate,71,0.0,4.3,2.32e8,50.7,2.21e6,151.8,49.8
 v2-noyau-temps,max,white,0-1,checkmate,78,0.0,4.8,2.76e8,52.6,1.67e6,142.5,78.8
 v2-noyau-temps,max,black,1-0,checkmate,43,0.0,5.0,2.65e8,75.7,2.05e6,164.0,119.9
+v3-recursif,1320,white,1/2-1/2,threefold_repetition,61,0.5,5.1,2.71e8,22.6,7.98e5,62.2,22.4
+v3-recursif,1320,black,0-1,checkmate,78,1.0,5.3,2.67e8,34.2,1.09e6,68.2,9.2
+v3-recursif,1500,white,1-0,checkmate,99,1.0,5.4,2.71e8,24.5,1.46e6,32.6,7.3
+v3-recursif,1500,black,0-1,checkmate,84,1.0,5.5,2.63e8,37.7,1.58e6,37.2,16.8
+v3-recursif,1700,white,0-1,checkmate,76,0.0,4.3,2.41e8,51.3,1.91e6,95.6,39.9
+v3-recursif,1700,black,1-0,checkmate,69,0.0,4.3,1.87e8,92.9,2.69e6,84.7,69.4
+v3-recursif,1900,white,0-1,checkmate,120,0.0,5.3,2.71e8,37.2,1.77e6,26.6,3.6
+v3-recursif,1900,black,1-0,checkmate,201,0.0,5.5,2.73e8,15.5,9.31e5,11.0,0.5

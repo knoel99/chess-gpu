@@ -84,8 +84,9 @@ def in_check(B, color, ksq=None):
     ksq = king_square(B, color) if ksq is None else ksq
     n = len(B)
     v = B.gather(1, geo["rays"][ksq]).view(n, 8, 7) * color  # pièces adverses < 0
-    occ = v != 0
-    first = (v * (occ & (occ.cumsum(2) == 1))).sum(2)  # première pièce rencontrée par direction
+    first = torch.zeros_like(v[:, :, 0])
+    for k in range(7):  # première pièce rencontrée par direction
+        first = torch.where(first == 0, v[:, :, k], first)
     diag, ortho = first[:, :4], first[:, 4:]
     hit = ((diag == -BISHOP) | (diag == -QUEEN)).any(1) | ((ortho == -ROOK) | (ortho == -QUEEN)).any(1)
     hit |= (B.gather(1, geo["kn"][ksq]) * color == -KNIGHT).any(1)

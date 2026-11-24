@@ -34,7 +34,7 @@ def stockfish_perft(fen, depth):
 def main():
     depth = int(sys.argv[1]) if len(sys.argv) > 1 else 5
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    chunk = int(sys.argv[2]) if len(sys.argv) > 2 else (2_000_000 if dev == "cuda" else 20_000)
+    chunk = int(sys.argv[2]) if len(sys.argv) > 2 else (300_000 if dev == "cuda" else 20_000)
     name = torch.cuda.get_device_name() if dev == "cuda" else "cpu"
     sync = torch.cuda.synchronize if dev == "cuda" else (lambda: None)
     for label, fen in POSITIONS.items():

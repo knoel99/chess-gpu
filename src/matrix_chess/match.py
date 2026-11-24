@@ -101,17 +101,18 @@ def main():
     ap.add_argument("--hash", type=int, default=256, help="table de hachage Stockfish (Mo)")
     ap.add_argument("--qdepth", type=int, default=4)
     ap.add_argument("--prune", action="store_true", help="alpha-bêta par lots (YBW) au lieu de la pleine largeur")
+    ap.add_argument("--stagger", action="store_true", help="avec --prune : cadets par groupes 1, 2, 4, 8…")
     ap.add_argument("--tag", default="", help="étiquette de la série, recopiée dans chaque résultat")
     ap.add_argument("--stop-after", type=int, default=0, help="arrêter après N niveaux sans point marqué")
     a = ap.parse_args()
     for k, v in PRESETS.get(a.preset, {}).items():
         setattr(a, k, v)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    searcher = ge.Searcher(dev, qdepth=a.qdepth, prune=a.prune)
+    searcher = ge.Searcher(dev, qdepth=a.qdepth, prune=a.prune, stagger=a.stagger)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
     def log(rec):
-        rec.update(tag=a.tag, prune=a.prune, preset=a.preset, sf_threads=a.threads, sf_hash=a.hash, clock=a.clock, inc=a.inc)
+        rec.update(tag=a.tag, prune=a.prune, stagger=a.stagger, preset=a.preset, sf_threads=a.threads, sf_hash=a.hash, clock=a.clock, inc=a.inc)
         print(json.dumps({k: v for k, v in rec.items() if k != "pgn_moves"}), flush=True)
         with open(OUT, "a") as f:
             f.write(json.dumps(rec) + "\n")

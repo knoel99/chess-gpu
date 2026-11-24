@@ -316,8 +316,8 @@ class Searcher:
     donc bornée que par le temps, et une itération trop longue est interrompue à la pendule.
     """
 
-    def __init__(self, dev, chunk=None, qdepth=4, prune=False):
-        self.dev, self.prune = dev, prune
+    def __init__(self, dev, chunk=None, qdepth=4, prune=False, stagger=False):
+        self.dev, self.prune, self.stagger = dev, prune, stagger
         self.chunk = chunk or (400_000 if dev == "cuda" else 20_000)
         self.qdepth = qdepth
         self.E = _eval_table(dev)
@@ -373,11 +373,17 @@ class Searcher:
                 par, child, ccr, cep = par[o], child[o], ccr[o], cep[o]
                 first = torch.ones_like(par, dtype=torch.bool)
                 first[1:] = par[1:] != par[:-1]
-                stages = [first, ~first]
+                if self.stagger:  # cadets par groupes de rangs 1, 2, 4, 8… (rangs [0], [1, 3), [3, 7)…)
+                    pos = torch.arange(len(par), device=dev)
+                    rank = pos - torch.cummax(torch.where(first, pos, 0), 0).values
+                    bounds = [0, 1, 3, 7, 15, 31, 1 << 30]
+                    stages = [(rank >= lo) & (rank < hi) for lo, hi in zip(bounds, bounds[1:])]
+                else:
+                    stages = [first, ~first]
             else:
                 stages = [None]
             for k, sel in enumerate(stages):
-                if sel is not None and k == 1:
+                if sel is not None and k >= 1:
                     sel = sel & (best[par] < beta[par])  # cadets des parents non coupés
                 p, c, cc, ce = (par, child, ccr, cep) if sel is None else (par[sel], child[sel], ccr[sel], cep[sel])
                 if not len(p):

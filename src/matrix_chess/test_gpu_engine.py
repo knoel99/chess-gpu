@@ -110,14 +110,16 @@ class TestGPUEngine(unittest.TestCase):
             self.assertAlmostEqual(info["score"], want, places=3, msg=fen)
 
     def test_pruned_search_same_score_as_full_width(self):
-        full, ab = ge.Searcher(DEV, qdepth=2), ge.Searcher(DEV, qdepth=2, prune=True)
+        full = ge.Searcher(DEV, qdepth=2)
+        pruned = [ge.Searcher(DEV, qdepth=2, prune=True), ge.Searcher(DEV, qdepth=2, prune=True, stagger=True)]
         for fen, _ in PERFT + [("r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8", None)]:
             B, cr, ep, color = state(fen)
             for d in (2, 3):
                 _, f = full.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
-                _, p = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
-                self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d))
-                self.assertLessEqual(p["nodes"], f["nodes"], (fen, d))
+                for ab in pruned:
+                    _, p = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
+                    self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d, ab.stagger))
+                    self.assertLessEqual(p["nodes"], f["nodes"], (fen, d, ab.stagger))
 
     def test_search_mate_in_one_and_free_queen(self):
         cases = [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),     # mat du couloir

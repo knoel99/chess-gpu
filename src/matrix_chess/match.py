@@ -2,7 +2,8 @@
 
 python-chess sert d'arbitre (nulles, répétitions, mat) ; chaque camp a sa pendule (défaut 3+0), un
 dépassement perd la partie. Stockfish est bridé par UCI_LimitStrength / UCI_Elo (minimum 1320),
-« max » = pleine force. Résultats ajoutés en JSON Lines dans results/matrix_chess/matches.jsonl.
+« max » = pleine force. Résultats ajoutés en JSON Lines dans results/matrix_chess/matches.jsonl ;
+`moves_info` y détaille chaque coup des deux camps (coup, score, profondeur, nœuds, temps, pendules).
 
 Préréglages de ressources Stockfish (--preset) :
 - uci-elo : conditions de calibration de UCI_Elo (wiki UCI de Stockfish : 60 s + 0,6 s, ancré sur
@@ -37,11 +38,17 @@ PRESETS = {
 }
 
 
-def our_move(searcher, board, clock, inc):
+def key(board):
+    """Clé de répétition d'une position python-chess, la même que celle des enfants de la recherche."""
+    g = ref_to_matrix(board)
+    return ge.position_keys(*ge.from_game(g, "cpu"), g.turn)[0]
+
+
+def our_move(searcher, board, clock, inc, history=()):
     g = ref_to_matrix(board)
     B, cr, ep = ge.from_game(g, searcher.dev)
-    # ~30 coups restants supposés ; une itération est interrompue à clock / 10 (+ incrément)
-    move, info = searcher.search(B, cr, ep, g.turn, clock / 30 + 0.8 * inc, hard=clock / 10 + inc)
+    # ~30 coups restants supposés ; une itération est interrompue à 1,5 × ce budget
+    move, info = searcher.search(B, cr, ep, g.turn, clock / 30 + 0.8 * inc, history=history)
     return chess.Move.from_uci(to_uci(move)), info
 
 
@@ -50,24 +57,35 @@ def play(searcher, sf, elo, ours_white, clock, inc, log):
     sf.configure({"UCI_LimitStrength": elo != "max", **({} if elo == "max" else {"UCI_Elo": int(elo)})})
     ours = chess.WHITE if ours_white else chess.BLACK
     stats = {"ours": [], "sf": []}
+    moves_info, seen = [], {key(board)}  # journal par coup ; positions déjà vues (répétitions)
     result, reason = None, None
     while not board.is_game_over(claim_draw=True):
         t0 = time.perf_counter()
         if board.turn == ours:
-            move, info = our_move(searcher, board, clocks[ours], inc)
+            move, info = our_move(searcher, board, clocks[ours], inc, seen)
             stats["ours"].append({k: info[k] for k in ("depth", "nodes", "nps")})
+            row = {"side": "ours", "score": round(info["score"], 1), "depth": info["depth"], "nodes": info["nodes"],
+                   **{k: info[k] for k in ("partial", "aborted") if k in info}}
         else:
             r = sf.play(board, chess.engine.Limit(white_clock=clocks[chess.WHITE], black_clock=clocks[chess.BLACK],
-                                                  white_inc=inc, black_inc=inc), info=chess.engine.INFO_BASIC)
+                                                  white_inc=inc, black_inc=inc), info=chess.engine.INFO_ALL)
             move = r.move
             stats["sf"].append({"depth": r.info.get("depth", 0), "nodes": r.info.get("nodes", 0),
                                 "nps": r.info.get("nps", 0)})
-        clocks[board.turn] -= time.perf_counter() - t0
+            sc = r.info.get("score")
+            row = {"side": "sf", "score": sc and sc.pov(board.turn).score(mate_score=int(ge.MATE)),
+                   "depth": r.info.get("depth", 0), "nodes": r.info.get("nodes", 0), "sf_time": r.info.get("time")}
+        spent = time.perf_counter() - t0
+        clocks[board.turn] -= spent
         if clocks[board.turn] <= 0:
             result, reason = ("0-1" if board.turn == chess.WHITE else "1-0"), "temps"
             break
         clocks[board.turn] += inc
+        # score : centipions du point de vue du camp qui joue ; time : secondes à la pendule ; pendules après le coup
+        moves_info.append({"ply": board.ply() + 1, "uci": move.uci(), **row, "time": round(spent, 3),
+                           "clock": {"ours": round(clocks[ours], 2), "sf": round(clocks[not ours], 2)}})
         board.push(move)
+        seen.add(key(board))
     if result is None:
         out = board.outcome(claim_draw=True)
         result, reason = out.result(), out.termination.name.lower()
@@ -80,6 +98,7 @@ def play(searcher, sf, elo, ours_white, clock, inc, log):
         "ours_nodes_total": sum(s["nodes"] for s in stats["ours"]),
         "sf_nodes_total": sum(s["nodes"] for s in stats["sf"]),
         "pgn_moves": " ".join(m.uci() for m in board.move_stack),
+        "moves_info": moves_info,
         "device": torch.cuda.get_device_name() if searcher.dev == "cuda" else "cpu",
     }
     log(rec)
@@ -113,7 +132,7 @@ def main():
 
     def log(rec):
         rec.update(tag=a.tag, prune=a.prune, waves=a.waves, preset=a.preset, sf_threads=a.threads, sf_hash=a.hash, clock=a.clock, inc=a.inc)
-        print(json.dumps({k: v for k, v in rec.items() if k != "pgn_moves"}), flush=True)
+        print(json.dumps({k: v for k, v in rec.items() if k not in ("pgn_moves", "moves_info")}), flush=True)
         with open(OUT, "a") as f:
             f.write(json.dumps(rec) + "\n")
 

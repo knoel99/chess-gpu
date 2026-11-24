@@ -305,7 +305,18 @@ def evaluate(B, color, E, chunk=8_000_000):
 # --- recherche : negamax pleine largeur + quiescence, par lots récursifs (mémoire bornée) ---
 
 class Timeout(Exception):
-    """Pendule dépassée au milieu d'une itération."""
+    """Pendule dépassée au milieu d'une itération. `partial` : scores racine acquis avant
+    l'interruption (-inf pour les coups non cherchés), ou None si le premier coup n'a pas fini."""
+
+    partial = None
+
+
+def position_keys(B, cr, ep, color):
+    """Clés de répétition (une par plateau) : pièces, droits de roque, trait `color`.
+    La case en passant est omise : une position où elle compte suit une poussée de deux cases et
+    n'a donc jamais pu être vue avant."""
+    rows = torch.cat([B, cr.to(torch.int8)], 1).cpu().numpy()
+    return [r.tobytes() + (b"w" if color == WHITE else b"b") for r in rows]
 
 
 class Searcher:
@@ -398,56 +409,93 @@ class Searcher:
         return torch.where(torch.isinf(best), torch.where(chk, -MATE + ply, 0.0), best)  # mat ou pat
 
     def root_scores(self, child, ccr, cep, color, depth, prev):
-        """Scores des coups racine. Avec self.prune : le meilleur coup de l'itération précédente
-        d'abord, fenêtre pleine, puis les autres d'un lot avec la fenêtre (-inf, -score du premier).
-        Un autre coup qui dépasse le premier a un score exact ; sinon son score n'est qu'une borne
-        haute, peut-être égale à celle du premier : on la place strictement en dessous pour que
-        l'argmax ne choisisse jamais un coup réfuté (les scores sont entiers)."""
-        if not self.prune:
-            return -self.value(child, ccr, cep, -color, 1, depth - 1, self.qdepth)
-        o = prev.argsort(descending=True, stable=True)
-        s = torch.empty_like(prev)
-        s[o[:1]] = -self.value(child[o[:1]], ccr[o[:1]], cep[o[:1]], -color, 1, depth - 1, self.qdepth)
-        rest = o[1:]
-        if len(rest):
-            s0 = s[o[0]]
-            r = -self.value(child[rest], ccr[rest], cep[rest], -color, 1, depth - 1, self.qdepth,
-                            torch.full((len(rest),), -float("inf"), device=prev.device), -s0.expand(len(rest)))
-            s[rest] = torch.where(r > s0, r, torch.minimum(r, s0) - 0.5)
+        """Scores des coups racine, cherchés par groupes de 1, 1, 2, 4, 8… coups dans l'ordre de
+        `prev` (scores de l'itération précédente), le meilleur d'abord et seul.
+
+        Avec self.prune : le premier en fenêtre pleine, les groupes suivants avec la fenêtre
+        (-inf, -meilleur score acquis). Un coup qui dépasse ce meilleur a un score exact ; sinon son
+        score n'est qu'une borne haute, peut-être égale au meilleur : on la place strictement en
+        dessous pour que l'argmax ne choisisse jamais un coup réfuté (les scores sont entiers).
+
+        Interrompue par la pendule, lève Timeout avec `partial` = scores des groupes terminés. Leur
+        argmax est sûr dès que le premier coup a fini : c'est soit lui (score exact à `depth`), soit
+        un coup dont le score exact à `depth` dépasse le sien."""
+        inf, dev = float("inf"), child.device
+        o = torch.arange(len(child), device=dev) if prev is None else prev.argsort(descending=True, stable=True)
+        s = torch.full((len(child),), -inf, device=dev)
+        a, z = 0, 1
+        try:
+            while a < len(o):
+                g = o[a:z]
+                if self.prune and a:
+                    top = s.max()
+                    r = -self.value(child[g], ccr[g], cep[g], -color, 1, depth - 1, self.qdepth,
+                                    torch.full((len(g),), -inf, device=dev), -top.expand(len(g)))
+                    s[g] = torch.where(r > top, r, torch.minimum(r, top) - 0.5)
+                else:
+                    s[g] = -self.value(child[g], ccr[g], cep[g], -color, 1, depth - 1, self.qdepth)
+                a, z = z, 2 * z
+        except Timeout as e:
+            e.partial = s if a else None
+            raise
         return s
 
-    def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64):
-        """Approfondit tant qu'on n'a pas dépassé `budget` et que l'itération suivante, prédite par le
-        rapport des deux dernières durées, finit avant `hard` (défaut 3 × budget). Une itération qui
-        dépasse quand même `hard` est interrompue : on garde le coup de la dernière profondeur complète."""
+    def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64, history=()):
+        """Approfondit tant que l'itération suivante, prédite par le facteur de branchement effectif
+        mesuré (rapport des durées de deux itérations de même parité), finit avant `hard` (défaut 1,5 × budget). Une itération qui dépasse quand même `hard` est
+        interrompue : on garde son résultat partiel s'il est sûr (voir root_scores), sinon le coup de
+        la dernière profondeur complète.
+
+        history : clés (position_keys) des positions déjà vues dans la partie. Un coup racine qui
+        ramène à l'une d'elles vaut 0 (nulle) : évité quand on mène, choisi quand on est perdu.
+        shortcut: répétitions vues à la racine seulement ; l'adversaire peut encore répéter par un
+        autre chemin au deuxième demi-coup. À étendre dans value() si des parties le montrent."""
         t0 = time.perf_counter()
-        hard = 3 * budget if hard is None else hard
+        hard = 1.5 * budget if hard is None else hard
         n, m, child, ccr, cep = expand(B, cr, ep, color)
         if len(m) <= 1:
-            return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
-        self.nodes, best, info, last = len(m), None, {}, []
+            return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0, time=0.0)
+        seen = torch.tensor([k in history for k in position_keys(child, ccr, cep, -color)] if history
+                            else [False] * len(m), device=B.device)
+        new = (~seen).nonzero().squeeze(1)  # seuls les coups vers une position nouvelle sont cherchés
+        child, ccr, cep = child[new], ccr[new], cep[new]
+        self.nodes, iters = len(m), []  # iters : (nœuds, durée) de chaque itération complète
         prev = -evaluate(child, -color, self.E)  # ordre des coups racine : évaluation statique, puis itération précédente
-        for depth in range(1, max_depth + 1):
-            if depth > min_depth and len(last) >= 1:  # coût prédit par le rapport des deux dernières durées
-                ratio = last[-1] / last[-2] if len(last) >= 2 and last[-2] > 0.02 else len(m)
-                if time.perf_counter() - t0 + last[-1] * max(ratio, 2.0) > hard:
+        best, info = to_move(m[0]), dict(depth=0, nodes=len(m), nps=0.0, score=0.0, time=0.0)  # si tous les coups répètent
+
+        def result(score, depth, **extra):
+            full = torch.zeros(len(m), device=B.device)
+            full[new] = score
+            i, elapsed = int(full.argmax()), time.perf_counter() - t0
+            return to_move(m[i]), dict(depth=depth, nodes=self.nodes, nps=self.nodes / max(elapsed, 1e-9),
+                                       score=float(full[i]), time=elapsed, **extra)
+
+        for depth in range(1, max_depth + 1 if len(new) else 0):
+            if depth > min_depth and iters:
+                # alpha-bêta alterne plis chers et bon marché : le facteur de branchement effectif se lit
+                # sur les durées à deux plis d'écart (meilleur prédicteur mesuré, encore faux d'un facteur 3 en
+                # moyenne : c'est l'interruption à `hard` et le résultat partiel qui bornent le temps)
+                d = [x[1] for x in iters]
+                ebf = d[-2] / d[-3] if len(d) > 2 else d[-1] / d[-2] if len(d) == 2 else 4.0
+                if time.perf_counter() - t0 + d[-1] * min(max(ebf, 1.5), 8.0) > hard:  # bornes : durées courtes bruitées
                     break
-            t_iter = time.perf_counter()
+            t_iter, n_iter = time.perf_counter(), self.nodes
             self.deadline = t0 + hard if depth > min_depth else float("inf")
             try:
-                score = self.root_scores(child, ccr, cep, color, depth, prev)
-            except Timeout:
+                prev = self.root_scores(child, ccr, cep, color, depth, prev)
+            except Timeout as e:
+                if e.partial is not None:
+                    best, info = result(e.partial, depth - 1, partial=depth)
                 info["aborted"] = depth
                 break
-            i = int(score.argmax())
-            elapsed = time.perf_counter() - t0
-            last.append(time.perf_counter() - t_iter)
-            best, prev = to_move(m[i]), score
-            info = dict(depth=depth, nodes=self.nodes, nps=self.nodes / max(elapsed, 1e-9),
-                        score=float(score[i]), time=elapsed)
-            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget):
+            iters.append((self.nodes - n_iter, time.perf_counter() - t_iter))
+            best, info = result(prev, depth)
+            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or info["time"] > budget):
                 break
         self.deadline = float("inf")
+        elapsed = time.perf_counter() - t0  # travail d'une itération interrompue compris
+        info.update(nodes=self.nodes, time=elapsed, nps=self.nodes / max(elapsed, 1e-9),
+                    iters=[(k, round(d, 4)) for k, d in iters])
         return best, info
 
 

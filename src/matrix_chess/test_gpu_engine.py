@@ -24,6 +24,9 @@ PERFT = [
     ("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", [44, 1486, 62379]),
 ]
 
+# toute variante exacte de l'alpha-bêta par lots : (vagues, tri)
+VARIANTES = [(w, "mvv") for w in ge.Searcher.WAVES] + [("ybw", "statique"), ("hybride", "historique"), ("adaptatif", "historique")]
+
 
 def state(fen):
     g = ref_to_matrix(chess.Board(fen))
@@ -111,21 +114,21 @@ class TestGPUEngine(unittest.TestCase):
 
     def test_pruned_search_same_score_as_full_width(self):
         full = ge.Searcher(DEV, qdepth=2)
-        pruned = [ge.Searcher(DEV, qdepth=2, prune=True), ge.Searcher(DEV, qdepth=2, prune=True, waves="1-2-4"), ge.Searcher(DEV, qdepth=2, prune=True, waves="hybride")]
+        pruned = [ge.Searcher(DEV, qdepth=2, prune=True, waves=w, tri=t) for w, t in VARIANTES]
         for fen, _ in PERFT + [("r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8", None)]:
             B, cr, ep, color = state(fen)
             for d in (2, 3):
                 _, f = full.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
                 for ab in pruned:
                     _, p = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
-                    self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d, ab.waves))
-                    self.assertLessEqual(p["nodes"], f["nodes"], (fen, d, ab.waves))
+                    self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d, ab.waves, ab.tri))
+                    self.assertLessEqual(p["nodes"], f["nodes"], (fen, d, ab.waves, ab.tri))
 
     def test_pruned_search_plays_a_best_move(self):
         """Le coup joué, pas seulement le score, doit valoir le minimax exact : les autres coups racine
         n'ont que des bornes hautes, une égalité de borne ne doit pas faire choisir un coup réfuté."""
         full = ge.Searcher(DEV, qdepth=2)
-        pruned = [ge.Searcher(DEV, qdepth=2, prune=True, waves=w) for w in ("ybw", "hybride")]
+        pruned = [ge.Searcher(DEV, qdepth=2, prune=True, waves=w, tri=t) for w, t in VARIANTES]
         fens = [fen for fen, _ in PERFT] + ["r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 4 5",
                                             "r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8",
                                             "8/5pk1/6p1/1R5p/7P/6P1/r4PK1/8 w - - 0 40"]
@@ -137,7 +140,7 @@ class TestGPUEngine(unittest.TestCase):
                 for ab in pruned:
                     move, info = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
                     i = [ge.to_move(x) for x in m.tolist()].index(move)
-                    self.assertAlmostEqual(float(exact[i]), float(exact.max()), places=3, msg=(fen, d, ab.waves))
+                    self.assertAlmostEqual(float(exact[i]), float(exact.max()), places=3, msg=(fen, d, ab.waves, ab.tri))
 
     def test_search_mate_in_one_and_free_queen(self):
         cases = [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),     # mat du couloir

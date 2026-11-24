@@ -327,19 +327,72 @@ class Searcher:
     donc bornée que par le temps, et une itération trop longue est interrompue à la pendule.
     """
 
-    WAVES = {"ybw": (0, 1), "hybride": (0, 1, 4), "1-2-4": (0, 1, 3, 7, 15, 31)}
+    WAVES = {"ybw": (0, 1), "hybride": (0, 1, 4), "1-2-4": (0, 1, 3, 7, 15, 31), "adaptatif": None}
+    # vagues adaptatives : (taille estimée du sous-arbre du lot en dessous de laquelle…, découpe) ; au-delà, 1-2-4
+    SEUILS = ((3e4, (0,)), (3e7, (0, 1)), (3e9, (0, 1, 4)))  # calibrés sur RTX PRO 6000, optimum plat
+    TRIS = ("statique", "mvv", "historique")
 
-    def __init__(self, dev, chunk=None, qdepth=4, prune=False, waves="ybw"):
-        """waves : découpe des fils par rang en vagues successives (aîné seul, puis…), voir WAVES."""
-        self.dev, self.prune = dev, prune
-        self.waves = (*self.WAVES[waves], 1 << 30)
+    def __init__(self, dev, chunk=None, qdepth=4, prune=False, waves="ybw", tri="mvv"):
+        """waves : découpe des fils par rang en vagues successives (aîné seul, puis…), voir WAVES ;
+        "adaptatif" choisit la découpe lot par lot (SEUILS). tri : ordre des fils, voir _key."""
+        assert tri in self.TRIS, tri
+        self.dev, self.prune, self.tri = dev, prune, tri
+        self.waves = (*(self.WAVES[waves] or self.WAVES["1-2-4"]), 1 << 30)
+        self.seuils = self.SEUILS if waves == "adaptatif" else ()
+        self.w_hist, self.journal = 400.0, True  # poids de l'historique dans la clé ; compteurs de coupe actifs
         self.chunk = chunk or (400_000 if dev == "cuda" else 20_000)
         self.qdepth = qdepth
         self.E = _eval_table(dev)
         self.deadline, self.nodes = float("inf"), 0
+        self.reset()
         if dev == "cuda":
             enable_compile()
             self.warmup()
+
+    def reset(self):
+        """Tables de tri et compteurs remis à zéro (une recherche = un résultat reproductible)."""
+        self.hist = torch.zeros(2, 4096, device=self.dev)   # [camp, 64·départ + arrivée] : coups calmes qui coupent
+        self.killer = torch.zeros(128, 4096, device=self.dev)  # idem par demi-coup depuis la racine
+        self.cuts = torch.zeros(128, 3, device=self.dev)    # par demi-coup : parents développés, coupés, coupés par l'aîné
+
+    def stats(self):
+        """Grandeurs de convergence de la dernière recherche : taux de coupe en première vague
+        (parents coupés par l'aîné / parents coupés), global et par demi-coup."""
+        c = self.cuts.cpu()
+        used = c[:, 0] > 0
+        tot = c.sum(0)
+        return dict(parents=int(tot[0]), cut=int(tot[1]), cut_first=int(tot[2]),
+                    first_rate=float(tot[2] / tot[1].clamp(min=1)),
+                    first_rate_by_ply=[round(float(x), 4) for x in (c[used, 2] / c[used, 1].clamp(min=1))])
+
+    def _key(self, B, par, m, child, color, ply):
+        """Clé de tri (N,) int64 < 2^32 des fils (petit = cherché d'abord), code 64·f + t et drapeau « calme ».
+        "statique" : évaluation statique de l'enfant. "mvv" : prises et promotions d'abord, par victime
+        décroissante puis attaquant croissant. "historique" : en plus, coups killer du demi-coup, puis
+        coups calmes avancés selon la table d'historique."""
+        ev = (evaluate(child, -color, self.E) + 65536).long().clamp(0, (1 << 17) - 1)  # petit pour l'adversaire = bon pour nous
+        if self.tri == "statique":
+            return ev, None, None
+        r = _consts(B.device)[4][B[par.unsqueeze(1), m[:, :2]].abs().long()]  # rangs (attaquant, victime)
+        vr = r[:, 1] + 8 * (m[:, 2] != 1) + (m[:, 3] != NONE)  # promotion, prise en passant
+        key = torch.where(vr == 0, (2 << 30) + ev, ((400 - 16 * vr + r[:, 0]) << 17) + ev)
+        if self.tri == "mvv":
+            return key, None, None
+        code, quiet = m[:, 0] * 64 + m[:, 1], vr == 0
+        h = self.hist[(1 - color) // 2]
+        adv = (self.w_hist * h[code] / h.max().clamp(min=1)).long()
+        k = self.killer[ply]
+        kil = (k[code] > 0) & (k[code] >= k.topk(2).values[1])
+        return torch.where(quiet, torch.where(kil, 1 << 30, 2 << 30) + (ev - adv).clamp(min=0), key), code, quiet
+
+    def _waves(self, n_par, n_child, remaining):
+        """Découpe en vagues du lot : fixe, ou choisie d'après la taille estimée du sous-arbre
+        (fils × branchement^(remaining − 1)) : petit lot = tout d'un coup, grand = échelonné fin."""
+        est = n_child * (n_child / n_par) ** (remaining - 1)
+        for s, w in self.seuils:
+            if est < s:
+                return (*w, 1 << 30)
+        return self.waves
 
     def warmup(self):
         """Compile les noyaux pour les deux camps, avec et sans quiescence, hors pendule."""
@@ -354,7 +407,7 @@ class Searcher:
         """Valeurs negamax (N,) des positions, du point de vue du trait `color`.
 
         Avec self.prune : alpha-bêta par lots (fenêtres alpha, beta (N,), fail-soft). Les fils de chaque
-        parent, triés par évaluation statique, sont cherchés par vagues de rangs (self.waves) : l'aîné
+        parent, triés (_key), sont cherchés par vagues de rangs (_waves, fixes ou adaptatives) : l'aîné
         seul, puis les suivants avec la fenêtre resserrée, seulement si le parent n'est pas déjà coupé
         (Young Brothers Wait pour (0, 1) ; plus de vagues = moins de nœuds mais des lots plus petits). En quiescence, le
         stand pat coupe avant toute prise. La valeur est exacte si alpha < v < beta, sinon une borne du
@@ -378,20 +431,21 @@ class Searcher:
             idx = live[a:z].nonzero().squeeze(1) + a if self.prune else torch.arange(a, z, device=dev)
             if not len(idx):
                 continue
-            n, _, child, ccr, cep = expand(B[idx], cr[idx], ep[idx], color, captures_only=quiesce)
+            n, m, child, ccr, cep = expand(B[idx], cr[idx], ep[idx], color, captures_only=quiesce)
             self.nodes += len(n)
             if not len(n):
                 continue
             par = idx[n]
+            waves = self._waves(len(idx), len(n), remaining) if self.prune and not quiesce else (0, 1 << 30)
             if self.prune and not quiesce:  # enfants groupés par parent, meilleur d'abord
-                o = evaluate(child, -color, self.E).argsort(stable=True)  # petit pour l'adversaire = bon pour nous
-                o = o[par[o].argsort(stable=True)]
+                key, code, quiet = self._key(B, par, m, child, color, ply)
+                o = ((par << 32) | key).argsort(stable=True)
                 par, child, ccr, cep = par[o], child[o], ccr[o], cep[o]
                 first = torch.ones_like(par, dtype=torch.bool)
                 first[1:] = par[1:] != par[:-1]
                 pos = torch.arange(len(par), device=dev)
                 rank = pos - torch.cummax(torch.where(first, pos, 0), 0).values  # rang du coup chez son parent
-                stages = [(rank >= lo) & (rank < hi) for lo, hi in zip(self.waves, self.waves[1:])]
+                stages = [(rank >= lo) & (rank < hi) for lo, hi in zip(waves, waves[1:])]
             else:
                 stages = [None]
             for k, sel in enumerate(stages):
@@ -403,6 +457,17 @@ class Searcher:
                 v = self.value(c, cc, ce, -color, ply + 1, max(remaining - 1, 0), qleft - quiesce,
                                -beta[p], -torch.maximum(alpha[p], best[p]))
                 best = best.scatter_reduce(0, p, -v, "amax")
+                if sel is None:
+                    continue
+                if k == 0 and self.journal:
+                    self.cuts[ply, 2] += ((-v >= beta[p]) & first[sel]).sum()
+                if code is not None:  # les coups calmes qui coupent montent dans les tables
+                    qc = code[o][sel][(-v >= beta[p]) & quiet[o][sel]]
+                    self.hist[(1 - color) // 2].index_add_(0, qc, torch.full(qc.shape, float(remaining ** 2), device=dev))
+                    self.killer[ply].index_add_(0, qc, torch.ones(qc.shape, device=dev))
+            if self.prune and not quiesce and self.journal:
+                self.cuts[ply, 0] += len(idx)
+                self.cuts[ply, 1] += (best[idx] >= beta[idx]).sum()
         if quiesce:
             return best
         chk = torch.cat([in_check(B[a:z], color) for a, z in chunks(len(B), 8_000_000)])
@@ -460,6 +525,7 @@ class Searcher:
         new = (~seen).nonzero().squeeze(1)  # seuls les coups vers une position nouvelle sont cherchés
         child, ccr, cep = child[new], ccr[new], cep[new]
         self.nodes, iters = len(m), []  # iters : (nœuds, durée) de chaque itération complète
+        self.reset()
         prev = -evaluate(child, -color, self.E)  # ordre des coups racine : évaluation statique, puis itération précédente
         best, info = to_move(m[0]), dict(depth=0, nodes=len(m), nps=0.0, score=0.0, time=0.0)  # si tous les coups répètent
 

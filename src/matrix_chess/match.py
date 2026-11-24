@@ -28,7 +28,7 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "..", "results", "matrix_che
 def our_move(searcher, board, clock):
     g = ref_to_matrix(board)
     B, cr, ep = ge.from_game(g, searcher.dev)
-    # ~30 coups restants supposés, pas d'incrément ; une itération prédite peut aller jusqu'à clock / 10
+    # ~30 coups restants supposés, pas d'incrément ; une itération est interrompue à clock / 10
     move, info = searcher.search(B, cr, ep, g.turn, clock / 30, hard=clock / 10)
     return chess.Move.from_uci(to_uci(move)), info
 
@@ -84,12 +84,11 @@ def main():
     ap.add_argument("--clock", type=float, default=180.0)
     ap.add_argument("--threads", type=int, default=1, help="threads Stockfish")
     ap.add_argument("--qdepth", type=int, default=4)
-    ap.add_argument("--max-nodes", type=int, default=None, help="plafond de nœuds stockés par recherche")
     ap.add_argument("--tag", default="", help="étiquette de la série, recopiée dans chaque résultat")
     ap.add_argument("--stop-after", type=int, default=0, help="arrêter après N niveaux sans point marqué")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    searcher = ge.Searcher(dev, qdepth=a.qdepth, max_nodes=a.max_nodes)
+    searcher = ge.Searcher(dev, qdepth=a.qdepth)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
     def log(rec):

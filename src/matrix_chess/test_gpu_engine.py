@@ -74,6 +74,41 @@ class TestGPUEngine(unittest.TestCase):
                     self.assertTrue(torch.equal(w, g), (name, color, capt))  # mêmes enfants, même ordre
                 self.assertEqual(ge.gpu_kernels.expand(B, cr, ep, color, capt, count_only=True), len(want[0]))
 
+    def test_search_matches_naive_negamax(self):
+        s = ge.Searcher(DEV, qdepth=1)
+
+        def naive(fen, depth, q):  # negamax position par position, même évaluation et quiescence
+            b = chess.Board(fen)
+            B, cr, ep, color = state(fen)
+            if depth == 0:
+                stand = float(ge.evaluate(B, color, s.E)[0])
+                if q == 0:
+                    return stand
+                moves = [m for m in b.legal_moves if b.is_capture(m) or m.promotion]
+            else:
+                moves = list(b.legal_moves)
+            _, mv, *_ = ge.expand(B, cr, ep, color, captures_only=depth == 0)
+            kept = {to_uci(ge.to_move(x)) for x in mv.tolist()}  # filtre MVV/LVA de la quiescence
+            vals = []
+            for m in moves:
+                if m.uci() in kept:
+                    b.push(m)
+                    vals.append(-naive(b.fen(), max(depth - 1, 0), q - (depth == 0)))
+                    b.pop()
+            if depth == 0:
+                return max([stand] + vals)
+            if not vals:
+                return -ge.MATE + 1 if b.is_check() else 0.0  # ply 1 : enfants de la racine
+            return max(vals)
+
+        for fen in ["r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+                    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1"]:
+            B, cr, ep, color = state(fen)
+            _, info = s.search(B, cr, ep, color, budget=1e9, min_depth=2, max_depth=2)
+            b = chess.Board(fen)
+            want = max(-naive((b.push(m), b.fen(), b.pop())[1], 1, 1) for m in list(b.legal_moves))
+            self.assertAlmostEqual(info["score"], want, places=3, msg=fen)
+
     def test_search_mate_in_one_and_free_queen(self):
         s = ge.Searcher(DEV)
         for fen, want in [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),        # mat du couloir

@@ -302,32 +302,26 @@ def evaluate(B, color, E, chunk=8_000_000):
     return torch.cat([color * E[B[a:z].long() + 6, sq_].sum(1) for a, z in chunks(len(B), chunk)] or [E[:0, 0]])
 
 
-# --- recherche : negamax pleine largeur + quiescence, arbre développé niveau par niveau ---
+# --- recherche : negamax pleine largeur + quiescence, par lots récursifs (mémoire bornée) ---
 
-def root_values(levels):
-    """Remonte les valeurs du dernier niveau jusqu'aux enfants de la racine (levels[1]).
-
-    Chaque niveau porte `parent` (indice dans le niveau précédent) et `stand`, sa valeur s'il n'a
-    aucun enfant (-MATE + ply ou 0 en pleine largeur, évaluation statique en quiescence). En
-    quiescence le trait peut aussi s'arrêter (stand pat) : v = max(stand, max des -v enfants).
-    """
-    v = levels[-1]["stand"]
-    for parent, child in zip(reversed(levels[1:-1]), reversed(levels[2:])):
-        best = torch.full_like(parent["stand"], -float("inf")).scatter_reduce(0, child["parent"], -v, "amax")
-        v = torch.maximum(best, parent["stand"]) if parent["quiesce"] else \
-            torch.where(torch.isinf(best), parent["stand"], best)
-    return v
+class Timeout(Exception):
+    """Pendule dépassée au milieu d'une itération."""
 
 
 class Searcher:
-    """Choisit un coup par approfondissement itératif dans un budget de temps (secondes)."""
+    """Choisit un coup par approfondissement itératif dans un budget de temps (secondes).
 
-    def __init__(self, dev, chunk=None, qdepth=4, max_nodes=None):
+    Chaque appel récursif ne garde en mémoire qu'un lot d'au plus `chunk` parents et leurs enfants
+    par niveau (comme perft) : seules les valeurs remontent, jamais l'arbre. La profondeur n'est
+    donc bornée que par le temps, et une itération trop longue est interrompue à la pendule.
+    """
+
+    def __init__(self, dev, chunk=None, qdepth=4):
         self.dev = dev
         self.chunk = chunk or (400_000 if dev == "cuda" else 20_000)
         self.qdepth = qdepth
-        self.max_nodes = max_nodes or (150_000_000 if dev == "cuda" else 3_000_000)
         self.E = _eval_table(dev)
+        self.deadline, self.nodes = float("inf"), 0
         if dev == "cuda":
             enable_compile()
             self.warmup()
@@ -341,62 +335,58 @@ class Searcher:
             self.search(*from_game(g, self.dev), g.turn, budget=0.0, min_depth=3, max_depth=3)
             g.push(mv)
 
+    def value(self, B, cr, ep, color, ply, remaining, qleft):
+        """Valeurs negamax (N,) des positions, du point de vue du trait `color`."""
+        quiesce = remaining == 0
+        if quiesce:
+            stand = evaluate(B, color, self.E)
+            if qleft == 0:
+                return stand
+        best = torch.full((len(B),), -float("inf"), device=B.device)
+        for a, z in chunks(len(B), self.chunk):
+            if time.perf_counter() > self.deadline:
+                raise Timeout
+            n, _, child, ccr, cep = expand(B[a:z], cr[a:z], ep[a:z], color, captures_only=quiesce)
+            self.nodes += len(n)
+            if len(n):
+                v = self.value(child, ccr, cep, -color, ply + 1, max(remaining - 1, 0), qleft - quiesce)
+                best[a:z] = best[a:z].scatter_reduce(0, n, -v, "amax")
+        if quiesce:  # stand pat : le trait peut ne pas prendre
+            return torch.maximum(best, stand)
+        chk = torch.cat([in_check(B[a:z], color) for a, z in chunks(len(B), 8_000_000)])
+        return torch.where(torch.isinf(best), torch.where(chk, -MATE + ply, 0.0), best)  # mat ou pat
+
     def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64):
-        """Approfondit tant que l'itération suivante, prédite par le rapport des durées des deux
-        dernières, finit avant `hard` (défaut 3 × budget) et qu'on n'a pas dépassé `budget`."""
+        """Approfondit tant qu'on n'a pas dépassé `budget` et que l'itération suivante, prédite par le
+        rapport des deux dernières durées, finit avant `hard` (défaut 3 × budget). Une itération qui
+        dépasse quand même `hard` est interrompue : on garde le coup de la dernière profondeur complète."""
         t0 = time.perf_counter()
         hard = 3 * budget if hard is None else hard
-        prev_iter, prev_iter_time, seen = None, 0.0, 0
-        sync = torch.cuda.synchronize if self.dev == "cuda" else (lambda: None)
-
-        def side(ply):
-            return color if ply % 2 == 0 else -color
-
-        def full_level(lv, ply):  # sans coup légal : mat (le plus tard possible) ou pat
-            # par morceaux : au-delà de 2^31 éléments, torch.compile recompile in_check (secondes, à la pendule)
-            chk = torch.cat([in_check(lv["B"][a:z], side(ply)) for a, z in chunks(max(len(lv["B"]), 1), 8_000_000)])
-            return dict(lv, stand=torch.where(chk, -MATE + ply, 0.0).float(), quiesce=False)
-
-        full = [full_level(dict(B=B, cr=cr, ep=ep, parent=None), 0)]
-        best, info = None, {}
-        try:
-            for depth in range(1, max_depth + 1):
-                nodes = full[-1]
-                n, m, child, ccr, cep = expand_all(nodes["B"], nodes["cr"], nodes["ep"], side(depth - 1), self.chunk)
-                if depth == 1:
-                    root_moves = m
-                    if len(m) <= 1:
-                        return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
-                q = dict(B=child, cr=ccr, ep=cep, parent=n)
-                total = sum(len(lv["B"]) for lv in full) + len(n)
-                levels = full + [dict(q, stand=evaluate(child, side(depth), self.E), quiesce=True)]
-                for qi in range(self.qdepth):  # quiescence : prises seulement, depuis les feuilles
-                    if not len(q["B"]) or total > self.max_nodes:
-                        break
-                    c = side(depth + qi)
-                    qn, _, qb, qcr, qep = expand_all(q["B"], q["cr"], q["ep"], c, self.chunk, captures_only=True)
-                    q, total = dict(B=qb, cr=qcr, ep=qep, parent=qn), total + len(qn)
-                    levels.append(dict(q, stand=evaluate(qb, -c, self.E), quiesce=True))
-                score = -root_values(levels)
-                sync()
-                now = time.perf_counter()
-                elapsed, iter_time, seen = now - t0, now - t0 - (prev_iter or 0), seen + total
-                i = int(score.argmax())
-                best = to_move(root_moves[i])
-                info = dict(depth=depth, nodes=seen, nps=seen / max(elapsed, 1e-9), score=float(score[i]),
-                            time=elapsed)
-                full.append(full_level(dict(B=child, cr=ccr, ep=cep, parent=n), depth))
-                growth = len(child) / max(len(nodes["B"]), 1)
-                ratio = iter_time / prev_iter_time if prev_iter and prev_iter_time > 0.02 else growth
-                predicted = iter_time * max(ratio, 2.0)
-                prev_iter, prev_iter_time = elapsed, iter_time
-                if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget
-                                           or elapsed + predicted > hard or len(child) * growth > self.max_nodes):
+        n, m, child, ccr, cep = expand(B, cr, ep, color)
+        if len(m) <= 1:
+            return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
+        self.nodes, best, info, last = len(m), None, {}, []
+        for depth in range(1, max_depth + 1):
+            if depth > min_depth and len(last) >= 1:  # coût prédit par le rapport des deux dernières durées
+                ratio = last[-1] / last[-2] if len(last) >= 2 and last[-2] > 0.02 else len(m)
+                if time.perf_counter() - t0 + last[-1] * max(ratio, 2.0) > hard:
                     break
-        except torch.OutOfMemoryError:  # itération trop grosse : on garde la profondeur précédente
-            if best is None:
-                raise
-            info["oom"] = True
+            t_iter = time.perf_counter()
+            self.deadline = t0 + hard if depth > min_depth else float("inf")
+            try:
+                score = -self.value(child, ccr, cep, -color, 1, depth - 1, self.qdepth)
+            except Timeout:
+                info["aborted"] = depth
+                break
+            i = int(score.argmax())
+            elapsed = time.perf_counter() - t0
+            last.append(time.perf_counter() - t_iter)
+            best = to_move(m[i])
+            info = dict(depth=depth, nodes=self.nodes, nps=self.nodes / max(elapsed, 1e-9),
+                        score=float(score[i]), time=elapsed)
+            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget):
+                break
+        self.deadline = float("inf")
         return best, info
 
 

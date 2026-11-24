@@ -1,5 +1,5 @@
 """Figures du rapport GPU (docs/rapport_gpu/figs/*.pdf), calculées depuis results/matrix_chess/ :
-summary.csv (matchs), ab_gpu.jsonl (alpha-bêta contre pleine largeur), perft_gpu.csv (perft).
+summary.csv (matchs), ab_gpu.csv (alpha-bêta contre pleine largeur), perft_gpu.csv (perft).
 
 Lancer depuis la racine : python docs/rapport_gpu/gen_figures.py
 """
@@ -100,26 +100,29 @@ def fig_perft():
 
 
 def fig_ab():
-    path = os.path.join(RES, "ab_gpu.jsonl")
-    if not os.path.exists(path):
-        return
-    rows = [json.loads(line) for line in open(path) if line.startswith("{\"pos\"")]
+    rows = [r for r in csv.DictReader(open(os.path.join(RES, "ab_gpu.csv")))
+            if r["kind"] == "profondeur" and r["qdepth"] == "4"]
     pos = list(dict.fromkeys(r["pos"] for r in rows))
-    fig, axes = plt.subplots(1, len(pos), figsize=(7.0, 2.3), sharey=True)
-    for ax, p in zip(axes, pos):
-        g = [r for r in rows if r["pos"] == p]
-        f = [r for r in g if "full" in r]
-        ax.plot([r["d"] for r in f], [r["full"]["nodes"] for r in f], marker="o", ms=3, lw=1.5, color=C[0],
-                label="pleine largeur")
-        ax.plot([r["d"] for r in g], [r["ab"]["nodes"] for r in g], marker="o", ms=3, lw=1.5, color=C[1],
-                label="alpha-bêta par lots")
-        ax.set_yscale("log")
-        ax.set_title(p, fontsize=8.5, color=INK)
-        ax.set_xlabel("profondeur")
-    axes[0].set_ylabel("nœuds générés")
-    axes[0].legend(fontsize=7, loc="upper left")
-    fig.tight_layout()
-    save(fig, "alphabeta_noeuds.pdf")
+    variants = [("pleine", "pleine largeur"), ("ybw", "YBW"), ("hybride", "hybride"), ("1-2-4", "vagues 1-2-4")]
+    colors = dict(zip([v for v, _ in variants], [C[0], C[1], C[2], "#6250d6"]))
+    for key, ylabel, name in (("nodes", "nœuds générés", "alphabeta_noeuds.pdf"),
+                              ("seconds", "temps mur (s)", "alphabeta_temps.pdf")):
+        fig, axes = plt.subplots(1, len(pos), figsize=(7.2, 2.4), sharey=True)
+        for ax, p in zip(axes, pos):
+            for v, label in variants:
+                g = sorted((int(r["d_or_budget"]), float(r[key])) for r in rows if r["pos"] == p and r["searcher"] == v)
+                g = [(d, y) for d, y in g if y > 0]
+                if g:
+                    ax.plot(*zip(*g), marker="o", ms=2.5, lw=1.4, color=colors[v], label=label)
+            ax.set_yscale("log")
+            ax.set_title(p, fontsize=8.5, color=INK)
+            ax.set_xlabel("profondeur")
+            ax.set_xticks(range(1, 7))
+        axes[0].set_ylabel(ylabel)
+        fig.legend(*axes[0].get_legend_handles_labels(), ncol=4, loc="lower center", bbox_to_anchor=(0.5, 1.0),
+                   fontsize=7.5)
+        fig.tight_layout()
+        save(fig, name)
 
 
 if __name__ == "__main__":

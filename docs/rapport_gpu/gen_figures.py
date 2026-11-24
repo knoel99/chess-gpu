@@ -27,8 +27,9 @@ SERIES = [("v1-torch", "v1 : torch"), ("v2-noyau-temps", "v2 : noyau CUDA"), ("v
 # conditions de calibration UCI_Elo (60 s + 0,6 s) ; la série hybride d'avant le correctif de racine en est exclue
 UCI = [("v4-plein-ucielo", "pleine largeur"), ("v4b-hybride-ucielo-corrige", "alpha-bêta hybride")]
 # axe des catégories de la figure vitesse/profondeur
-SPEED = SERIES + [("v4-plein-ucielo", "v4 : plein"), ("v4b-hybride-ucielo-corrige", "v4 : hybride"),
-                  ("v4-hybride-machine", "v4 : SF machine")]
+SPEED = [("v1-torch", "v1\ntorch"), ("v2-noyau-temps", "v2\nnoyau"), ("v3-recursif", "v3\nrécursif"),
+         ("v4-plein-ucielo", "v4\nplein"), ("v4b-hybride-ucielo-corrige", "v4\nhybride"),
+         ("v4-hybride-machine", "v4\nSF\nmachine")]
 ELOS = ["1320", "1500", "1700", "1900", "2200", "2500", "max"]
 
 plt.rcParams.update({"font.size": 9, "axes.edgecolor": MUTED, "axes.labelcolor": INK, "xtick.color": MUTED,
@@ -69,7 +70,7 @@ def fig_scores(rows, series=SERIES, name="scores.pdf"):
 
 def fig_speed_depth(rows):
     series = [(t, l) for t, l in SPEED if any(r["tag"] == t for r in rows)]
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.8))
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 2.9))
     for k, (tag, label) in enumerate(series):
         g = [r for r in rows if r["tag"] == tag]
         axes[0].scatter([k - 0.15] * len(g), [float(r["ours_nps"]) for r in g], s=12, color=C[0],
@@ -79,7 +80,7 @@ def fig_speed_depth(rows):
         axes[1].scatter([k - 0.15] * len(g), [float(r["ours_depth"]) for r in g], s=12, color=C[0])
         axes[1].scatter([k + 0.15] * len(g), [float(r["sf_depth"]) for r in g], s=12, color=C[1])
     for ax in axes:
-        ax.set_xticks(range(len(series)), [l.replace(" : ", "\n") for _, l in series], fontsize=7)
+        ax.set_xticks(range(len(series)), [l for _, l in series], fontsize=6.5)
     axes[0].set_yscale("log")
     axes[0].set_ylabel("nœuds par seconde (moyenne par partie)")
     axes[1].set_ylabel("profondeur moyenne (demi-coups)")

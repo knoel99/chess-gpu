@@ -29,12 +29,15 @@ On porte sur GPU (NVIDIA RTX PRO 6000 Blackwell, 96~Go) le moteur d'échecs matr
 où chaque coup est une matrice $T$ telle que $b' = T\,b$. La génération des coups légaux tourne
 entièrement par lots de tenseurs. Le perft atteint $5{,}1\cdot 10^{10}$ nœuds/s, soit 157 fois
 \code{go perft} de Stockfish~16 sur un thread. En jeu, une recherche negamax pleine largeur
-calcule 100 à 300 fois plus de positions que Stockfish, mais ne voit que 4 à 6 demi-coups : elle
-plafonne vers 1500--1700 Elo de Stockfish bridé. On formule alors un équivalent matriciel de
-l'alpha-bêta, par fenêtres $[\alpha,\beta]$ et vagues de fils traitées par lots, dont on démontre
-la convergence et que l'on mesure. À temps égal, il gagne 1 à 3 demi-coups et garde exactement la
-valeur minimax. Trois agents ont été consultés. On confronte ici leurs hypothèses aux mesures GPU
-et l'on fixe le plan du prochain incrément.
+calcule 100 à 300 fois plus de positions que Stockfish, mais ne voit que 4 à 6 demi-coups. On
+formule alors un équivalent matriciel de l'alpha-bêta : fenêtres $[\alpha,\beta]$ remontées dans
+le semi-anneau $(\max,+)$ et vagues de fils traitées par lots. On en démontre la convergence,
+monotone et finie, et l'on vérifie qu'il garde exactement la valeur minimax. À temps égal, il
+gagne 1 à 3 demi-coups. Dans les conditions de calibration de Stockfish (60~s~+~0{,}6~s), il
+marque 7{,}5/14 contre 5{,}5/14 pour la pleine largeur, dont 1{,}5/2 contre Stockfish 2200. Les
+matchs ont aussi révélé un bug de choix du coup racine, corrigé et désormais testé. Trois agents
+ont été consultés. Leurs hypothèses sont confrontées aux mesures GPU, et le plan du prochain
+incrément en découle.
 \end{abstract}
 
 \tableofcontents
@@ -53,7 +56,7 @@ dans l'écart entre les deux.
 valeurs de référence publiées valident un générateur de coups, et la vitesse de calcul mesure le
 débit brut.
 \item[Kiwipete] Position de test de Peter McKenzie
-(\code{r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -}). Elle réunit les quatre
+(\code{r3k2r/\allowbreak p1ppqpb1/\allowbreak bn2pnp1/\allowbreak 3PN3/\allowbreak 1p2P3/\allowbreak 2N2Q1p/\allowbreak PPPBBPPP/\allowbreak R3K2R w KQkq -}). Elle réunit les quatre
 roques, des prises en passant, des clouages et des échecs, avec 48 coups légaux au premier
 demi-coup. Son perft à la profondeur 6 vaut 8\,031\,647\,685.
 \item[Pleine largeur] Minimax qui développe tous les coups à chaque niveau, sans élagage.
@@ -251,6 +254,11 @@ en 3~s & lots & Nœuds confirmés. Temps infirmé : le débit est divisé par 30
 sont trop petits.\\
 L'élagage exact rapporte $+1{,}5$ à $+2{,}5$ demi-coups & lots & Confirmé : $+2$ à $+3$ avec
 l'hybride.\\
+La profondeur limite la force (perte Stockfish de 71~cp en profondeur 4, 20~cp en 8) & critique &
+Cohérent : l'hybride corrigé (6{,}4 demi-coups) marque 7{,}5/14 contre 5{,}5/14 (4{,}8 demi-coups),
+écart non significatif sur 14 parties.\\
+Le lot naïf égale à peu près un cœur CPU en alpha-bêta & critique & Plausible : le débit de
+l'hybride en partie est de $0{,}7$ à $2{,}8\cdot10^7$ nœuds/s.\\
 Un bassin global de nœuds prêts réglerait le débit & lots & Rétrogradé par l'agent lui-même : le
 chemin critique compte des milliers de pas à $d=8$.\\
 \bottomrule
@@ -302,7 +310,12 @@ avec Hash 8~Go. Notre moteur garde les deux cœurs restants. Les API Stockfish e
 latence réseau à la pendule.
 
 \section{Plan du prochain incrément}
+Les trois agents et les mesures convergent sur l'ordre suivant. Chaque étape garde l'invariant
+déjà testé : même valeur et même coup que le minimax exact, tant que l'élagage reste exact.
 \begin{enumerate}
+\item \textbf{Filtre de qualité déterministe} avant tout match : perte Stockfish (profondeur 14)
+du coup choisi sur 300 positions, à budget fixe. C'est quelques minutes de calcul, et ce filtre
+aurait attrapé le bug de racine.
 \item \textbf{Tri des coups.} Prises MVV/LVA en tête, puis killer et historique en tenseurs.
 \emph{Validation} : le taux de coupe en première vague, et les nœuds du Gambit-Dame en
 profondeur 6 sous YBW.
@@ -310,8 +323,11 @@ profondeur 6 sous YBW.
 fixe sur les cinq positions, qui doit être meilleur que l'hybride partout.
 \item \textbf{Gestion du temps} : prédiction par $N_d/N_{d-1}$ et résultat partiel conservé.
 \emph{Validation} : temps consommé sur temps budgété, qui doit rester sous 1{,}5.
-\item \textbf{Matchs statistiques} en préréglage \code{uci-elo}, avec au moins 100 parties par
-niveau et un intervalle de confiance sur l'Elo. Deux parties ne départagent rien.
+\item \textbf{Matchs statistiques} : hybride contre pleine largeur sur 200 parties, avec
+ouvertures appariées et couleurs inversées ($\pm49$ Elo à 95~\%), puis 50 parties par niveau
+contre Stockfish en préréglage \code{uci-elo}. Deux parties par niveau ne départagent rien.
+\item \textbf{Refus de répéter une position quand on mène} : c'est le correctif le moins cher. Une
+partie v2 a jeté un demi-point avec six pions d'avance.
 \item \textbf{Table de transposition} sur GPU, puis LMR et coup nul validés par des parties.
 \item \textbf{Volet rétrograde} : porter \code{retro.predecessors} sur GPU (la préimage
 $b=R\,b'+c\,e_t$ est un \code{gather}/\code{scatter}), et brancher les buts de \code{impose.py},
@@ -325,11 +341,14 @@ de la convergence vers une position finale imposée.
 GPU.
 \item Perft : \code{python -m src.matrix\_chess.bench\_gpu 6}.
 \item Matchs : \code{python -m src.matrix\_chess.match --prune --waves hybride --preset uci-elo}.
-\item Données : \code{results/matrix\_chess/} (\code{summary.csv}, \code{games.txt},
-\code{ab\_gpu.csv}, \code{perft\_gpu.csv}).
+\item Données : \code{results/\allowbreak matrix\_chess/} (\code{summary.csv}, \code{games.txt},
+\code{ab\_gpu.csv}, \code{perft\_gpu.csv}). Les 62 parties de \code{games.txt} sont rejouées
+avec python-chess et conformes au résumé. Les coups de la série v3 sont perdus.
 \item Figures et tableaux : \code{python docs/rapport\_gpu/gen\_figures.py}.
 \end{itemize}
-Les pods Runpod RTX PRO 6000 coûtent 2{,}69~\$/h en cloud sécurisé. Un hôte communautaire à
+Les pods Runpod RTX PRO 6000 coûtent 2{,}69~\$/h en cloud sécurisé. Le coût total de
+l'incrément est de 12{,}27~\$ : le solde est passé de 65{,}20 à 52{,}93~\$. Tous les pods ont été
+supprimés. Un hôte communautaire à
 1{,}69~\$/h a été écarté : son pilote renvoyait \code{cuInit} = 999. Les coups de la série v3 sont
 perdus, parce que le disque du conteneur est effacé à l'arrêt d'un pod sans volume.
 

@@ -25,7 +25,7 @@ import time
 import torch
 
 from .engine import BISHOP, DIAG_DIRS, KING, KING_DIRS, KNIGHT, KNIGHT_DIRS, PAWN, QUEEN, ROOK, WHITE
-from .reduced_gpu import apply_moves, attacked_by, in_check, shift
+from .reduced_gpu import apply_moves, attacked_by, shift
 
 NONE = 64
 N_PLANES = 70
@@ -42,6 +42,19 @@ def plane_offsets(color):
     return off
 
 
+def _rays():
+    """Cases vues depuis chaque case : RAYS (64, 8, 7) par direction de KING_DIRS (de la plus proche à la
+    plus lointaine), KN (64, 8) sauts de cavalier, KG (64, 8) voisins ; NONE (toujours vide) hors plateau."""
+    def at(r, c):
+        return 8 * r + c if 0 <= r < 8 and 0 <= c < 8 else NONE
+    rays = [[[at(s // 8 + dr * k, s % 8 + dc * k) for k in range(1, 8)] for dr, dc in KING_DIRS] for s in range(64)]
+    kn = [[at(s // 8 + dr, s % 8 + dc) for dr, dc in KNIGHT_DIRS] for s in range(64)]
+    kg = [[at(s // 8 + dr, s % 8 + dc) for dr, dc in KING_DIRS] for s in range(64)]
+    # pions adverses qui attaqueraient un roi de couleur c : une rangée devant lui (sens de ses pions)
+    pw = {c: [[at(s // 8 - c, s % 8 + dc) for dc in (-1, 1)] for s in range(64)] for c in (1, -1)}
+    return rays, kn, kg, pw
+
+
 _cache = {}
 
 
@@ -52,8 +65,32 @@ def _consts(dev):
         lose = torch.zeros(65, 4, dtype=torch.bool)
         for sq_, rights in [(60, (0, 1)), (63, (0,)), (56, (1,)), (4, (2, 3)), (7, (2,)), (0, (3,))]:
             lose[sq_, list(rights)] = True
-        _cache[dev] = offs, lose.to(dev), torch.tensor(PROMOS, device=dev)
+        rays, kn, kg, pw = _rays()
+        geo = dict(rays=torch.tensor(rays, device=dev).view(64, 56), kn=torch.tensor(kn, device=dev),
+                   kg=torch.tensor(kg, device=dev), pw={c: torch.tensor(v, device=dev) for c, v in pw.items()})
+        _cache[dev] = offs, lose.to(dev), torch.tensor(PROMOS, device=dev), geo
     return _cache[dev]
+
+
+def king_square(B, color):
+    """Case (N,) du roi de `color`."""
+    return (B[:, :64] == color * KING).to(torch.int8).argmax(1)
+
+
+def in_check(B, color, ksq=None):
+    """Booléen (N,) : le roi de `color` est-il attaqué ? Regard depuis le roi seulement : 74 cases lues
+    par plateau (un gather), au lieu des masques d'attaque de tout le camp adverse."""
+    geo = _consts(B.device)[3]
+    ksq = king_square(B, color) if ksq is None else ksq
+    n = len(B)
+    v = B.gather(1, geo["rays"][ksq]).view(n, 8, 7) * color  # pièces adverses < 0
+    occ = v != 0
+    first = (v * (occ & (occ.cumsum(2) == 1))).sum(2)  # première pièce rencontrée par direction
+    diag, ortho = first[:, :4], first[:, 4:]
+    hit = ((diag == -BISHOP) | (diag == -QUEEN)).any(1) | ((ortho == -ROOK) | (ortho == -QUEEN)).any(1)
+    hit |= (B.gather(1, geo["kn"][ksq]) * color == -KNIGHT).any(1)
+    hit |= (B.gather(1, geo["kg"][ksq]) * color == -KING).any(1)
+    return hit | (B.gather(1, geo["pw"][color][ksq]) * color == -PAWN).any(1)
 
 
 def pseudo_planes(B, cr, ep, color, captures_only=False):
@@ -108,7 +145,7 @@ def pseudo_planes(B, cr, ep, color, captures_only=False):
 
 def decode(mask, B, ep, color):
     """Masque (N, 70, 64) -> (parent (M,), coups (M, 6) f, t, k, ec, f2, t2, poussée double (M,))."""
-    offs, _, promos = _consts(B.device)
+    offs, _, promos, _ = _consts(B.device)
     n, p, f = mask.nonzero(as_tuple=True)
     t = f + offs[color][p]
     pawn = (p >= 64) & (p < 68)
@@ -131,10 +168,11 @@ def decode(mask, B, ep, color):
 
 def expand(B, cr, ep, color, captures_only=False):
     """Enfants légaux du lot : (parent, coups, B', cr', ep')."""
-    _, lose, _ = _consts(B.device)
+    lose = _consts(B.device)[1]
     n, m, double = decode(pseudo_planes(B, cr, ep, color, captures_only), B, ep, color)
     child = apply_moves(B[n], m)
-    ok = ~in_check(child[:, :64].view(-1, 8, 8), color)
+    kp = king_square(B, color)[n]
+    ok = ~in_check(child, color, torch.where(m[:, 0] == kp, m[:, 1], kp))
     n, m, child, double = n[ok], m[ok], child[ok], double[ok]
     ccr = cr[n] & ~lose[m[:, 0]] & ~lose[m[:, 1]]
     cep = torch.where(double, (m[:, 0] + m[:, 1]) // 2, torch.full_like(n, NONE))
@@ -259,7 +297,7 @@ class Searcher:
             return color if ply % 2 == 0 else -color
 
         def full_level(lv, ply):  # sans coup légal : mat (le plus tard possible) ou pat
-            chk = in_check(lv["B"][:, :64].view(-1, 8, 8), side(ply))
+            chk = in_check(lv["B"], side(ply))
             return dict(lv, stand=torch.where(chk, -MATE + ply, 0.0).float(), quiesce=False)
 
         full = [full_level(dict(B=B, cr=cr, ep=ep, parent=None), 0)]

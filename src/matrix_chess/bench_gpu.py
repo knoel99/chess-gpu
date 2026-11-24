@@ -37,10 +37,12 @@ def main():
     chunk = int(sys.argv[2]) if len(sys.argv) > 2 else (300_000 if dev == "cuda" else 20_000)
     name = torch.cuda.get_device_name() if dev == "cuda" else "cpu"
     sync = torch.cuda.synchronize if dev == "cuda" else (lambda: None)
+    if dev == "cuda":
+        ge.enable_compile()
     for label, fen in POSITIONS.items():
         g = ref_to_matrix(chess.Board(fen))
         B, cr, ep = ge.from_game(g, dev)
-        ge.perft(B, cr, ep, g.turn, 2, chunk)  # chauffe (allocations, noyaux)
+        ge.perft(B, cr, ep, g.turn, 3, chunk)  # chauffe (allocations, noyaux)
         sync()
         t0 = time.perf_counter()
         ours = ge.perft(B, cr, ep, g.turn, depth, chunk)

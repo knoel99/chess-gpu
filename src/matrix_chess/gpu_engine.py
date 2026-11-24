@@ -149,8 +149,7 @@ def decode(mask, B, ep, color):
     offs, _, promos, _ = _consts(B.device)
     n, p, f = mask.nonzero(as_tuple=True)
     t = f + offs[color][p]
-    pawn = (p >= 64) & (p < 68)
-    promo = pawn & (t // 8 == (0 if color == WHITE else 7))
+    promo = (p >= 64) & (p < 68) & (t // 8 == (0 if color == WHITE else 7))
     if promo.any():  # une ligne par pièce de promotion
         reps = 1 + 3 * promo.long()
         idx = torch.repeat_interleave(torch.arange(len(n), device=B.device), reps)
@@ -159,25 +158,43 @@ def decode(mask, B, ep, color):
         k = torch.where(promo, promos[j.clamp(max=3)], 1)
     else:
         k = torch.ones_like(f)
+    return n, _pack(p, f, t, k, ep[n], color), p == 65
+
+
+def _pack(p, f, t, k, ep, color):
+    """Coups (M, 6) : case vidée en passant, déplacement de la tour du roque."""
     none = torch.full_like(f, NONE)
-    ec = torch.where((p >= 66) & (p < 68) & (t == ep[n]), (f // 8) * 8 + t % 8, none)
+    ec = torch.where((p >= 66) & (p < 68) & (t == ep), (f // 8) * 8 + t % 8, none)
     row = 56 if color == WHITE else 0
     f2 = torch.where(p == 68, row + 7, torch.where(p == 69, row, none))
     t2 = torch.where(p == 68, row + 5, torch.where(p == 69, row + 3, none))
-    return n, torch.stack([f, t, k, ec, f2, t2], 1), p == 65
+    return torch.stack([f, t, k, ec, f2, t2], 1)
 
 
-def expand(B, cr, ep, color, captures_only=False):
-    """Enfants légaux du lot : (parent, coups, B', cr', ep')."""
+def _children(B, cr, kp, m, double, color):
+    """Plateaux enfants, masque de légalité et droits des enfants, tous de longueur M (non filtrés)."""
     lose = _consts(B.device)[1]
-    n, m, double = decode(pseudo_planes(B, cr, ep, color, captures_only), B, ep, color)
-    child = apply_moves(B[n], m)
-    kp = king_square(B, color)[n]
+    child = apply_moves(B, m)
     ok = ~in_check(child, color, torch.where(m[:, 0] == kp, m[:, 1], kp))
-    n, m, child, double = n[ok], m[ok], child[ok], double[ok]
-    ccr = cr[n] & ~lose[m[:, 0]] & ~lose[m[:, 1]]
-    cep = torch.where(double, (m[:, 0] + m[:, 1]) // 2, torch.full_like(n, NONE))
-    return n, m, child, ccr, cep
+    ccr = cr & ~lose[m[:, 0]] & ~lose[m[:, 1]]
+    cep = torch.where(double, (m[:, 0] + m[:, 1]) // 2, torch.full_like(m[:, 0], NONE))
+    return child, ok, ccr, cep
+
+
+def expand(B, cr, ep, color, captures_only=False, count_only=False):
+    """Enfants légaux du lot : (parent, coups, B', cr', ep'), ou leur nombre si count_only."""
+    n, m, double = decode(pseudo_planes(B, cr, ep, color, captures_only), B, ep, color)
+    child, ok, ccr, cep = _children(B[n], cr[n], king_square(B, color)[n], m, double, color)
+    if count_only:
+        return int(ok.sum())
+    return n[ok], m[ok], child[ok], ccr[ok], cep[ok]
+
+
+def enable_compile():
+    """Fusionne les opérations élément par élément en noyaux GPU (torch.compile, formes dynamiques)."""
+    global pseudo_planes, in_check, _pack, _children
+    pseudo_planes, in_check, _pack, _children = (torch.compile(f, dynamic=True)
+                                                 for f in (pseudo_planes, in_check, _pack, _children))
 
 
 def chunks(total, size):
@@ -197,8 +214,11 @@ def perft(B, cr, ep, color, depth, chunk=200_000):
     """Nombre de feuilles à `depth` demi-coups (comptage en masse au dernier niveau)."""
     total = 0
     for a, z in chunks(len(B), chunk):
-        n, _, child, ccr, cep = expand(B[a:z], cr[a:z], ep[a:z], color)
-        total += len(n) if depth == 1 else perft(child, ccr, cep, -color, depth - 1, chunk)
+        if depth == 1:
+            total += expand(B[a:z], cr[a:z], ep[a:z], color, count_only=True)
+        else:
+            _, _, child, ccr, cep = expand(B[a:z], cr[a:z], ep[a:z], color)
+            total += perft(child, ccr, cep, -color, depth - 1, chunk)
     return total
 
 
@@ -289,6 +309,8 @@ class Searcher:
         self.qdepth = qdepth
         self.max_nodes = max_nodes or (150_000_000 if dev == "cuda" else 3_000_000)
         self.E = _eval_table(dev)
+        if dev == "cuda":
+            enable_compile()
 
     def search(self, B, cr, ep, color, budget, min_depth=1, max_depth=64):
         t0 = time.perf_counter()
@@ -343,6 +365,8 @@ if __name__ == "__main__":
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     depth = int(sys.argv[1]) if len(sys.argv) > 1 else 4
     chunk = int(sys.argv[2]) if len(sys.argv) > 2 else (400_000 if dev == "cuda" else 20_000)
+    if dev == "cuda":
+        enable_compile()
     B, cr, ep = from_game(Game(), dev)
     for d in range(1, depth + 1):
         if dev == "cuda":

@@ -24,6 +24,7 @@ import time
 
 import torch
 
+from . import gpu_kernels
 from .engine import BISHOP, DIAG_DIRS, KING, KING_DIRS, KNIGHT, KNIGHT_DIRS, PAWN, QUEEN, ROOK, WHITE
 from .reduced_gpu import apply_moves, attacked_by, shift
 
@@ -183,7 +184,13 @@ def _children(B, cr, kp, m, double, color):
 
 
 def expand(B, cr, ep, color, captures_only=False, count_only=False):
-    """Enfants légaux du lot : (parent, coups, B', cr', ep'), ou leur nombre si count_only."""
+    """Enfants légaux du lot : (parent, coups, B', cr', ep'), ou leur nombre si count_only.
+    Sur cuda avec CuPy : noyau fusionné de gpu_kernels ; sinon expand_torch (référence, même résultat)."""
+    fused = gpu_kernels.expand if gpu_kernels.available(B.device) else expand_torch
+    return fused(B, cr, ep, color, captures_only, count_only)
+
+
+def expand_torch(B, cr, ep, color, captures_only=False, count_only=False):
     n, m, double = decode(pseudo_planes(B, cr, ep, color, captures_only), B, ep, color)
     if captures_only:
         # shortcut: quiescence sans alpha-bêta = arbre des prises complet, qui explose ; on ne garde que
@@ -329,7 +336,8 @@ class Searcher:
         """Compile les noyaux pour les deux camps, avec et sans quiescence, hors pendule."""
         from .engine import Game
         g = Game()
-        for mv in ((52, 36, None, None, None), (12, 28, None, None, None)):
+        # troisième passe : in_check est recompilé une fois de plus pour le premier camp (garde sur _cache)
+        for mv in ((52, 36, None, None, None), (12, 28, None, None, None), (62, 45, None, None, None)):
             self.search(*from_game(g, self.dev), g.turn, budget=0.0, min_depth=3, max_depth=3)
             g.push(mv)
 
@@ -345,7 +353,8 @@ class Searcher:
             return color if ply % 2 == 0 else -color
 
         def full_level(lv, ply):  # sans coup légal : mat (le plus tard possible) ou pat
-            chk = in_check(lv["B"], side(ply))
+            # par morceaux : au-delà de 2^31 éléments, torch.compile recompile in_check (secondes, à la pendule)
+            chk = torch.cat([in_check(lv["B"][a:z], side(ply)) for a, z in chunks(max(len(lv["B"]), 1), 8_000_000)])
             return dict(lv, stand=torch.where(chk, -MATE + ply, 0.0).float(), quiesce=False)
 
         full = [full_level(dict(B=B, cr=cr, ep=ep, parent=None), 0)]

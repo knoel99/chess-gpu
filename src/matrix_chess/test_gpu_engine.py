@@ -121,6 +121,24 @@ class TestGPUEngine(unittest.TestCase):
                     self.assertAlmostEqual(p["score"], f["score"], places=3, msg=(fen, d, ab.waves))
                     self.assertLessEqual(p["nodes"], f["nodes"], (fen, d, ab.waves))
 
+    def test_pruned_search_plays_a_best_move(self):
+        """Le coup joué, pas seulement le score, doit valoir le minimax exact : les autres coups racine
+        n'ont que des bornes hautes, une égalité de borne ne doit pas faire choisir un coup réfuté."""
+        full = ge.Searcher(DEV, qdepth=2)
+        pruned = [ge.Searcher(DEV, qdepth=2, prune=True, waves=w) for w in ("ybw", "hybride")]
+        fens = [fen for fen, _ in PERFT] + ["r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2P2N2/PP1P1PPP/RNBQK2R w KQkq - 4 5",
+                                            "r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N1PN2/PP3PPP/R2QKB1R w KQ - 0 8",
+                                            "8/5pk1/6p1/1R5p/7P/6P1/r4PK1/8 w - - 0 40"]
+        for fen in fens:
+            B, cr, ep, color = state(fen)
+            _, m, child, ccr, cep = ge.expand(B, cr, ep, color)
+            for d in (2, 3):
+                exact = full.root_scores(child, ccr, cep, color, d, None)
+                for ab in pruned:
+                    move, info = ab.search(B, cr, ep, color, budget=1e9, min_depth=d, max_depth=d)
+                    i = [ge.to_move(x) for x in m.tolist()].index(move)
+                    self.assertAlmostEqual(float(exact[i]), float(exact.max()), places=3, msg=(fen, d, ab.waves))
+
     def test_search_mate_in_one_and_free_queen(self):
         cases = [("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"),     # mat du couloir
                  ("4k3/8/8/3q4/8/8/3R4/4K3 w - - 0 1", "d2d5")]     # dame en prise

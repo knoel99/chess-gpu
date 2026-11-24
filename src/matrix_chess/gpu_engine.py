@@ -399,8 +399,10 @@ class Searcher:
 
     def root_scores(self, child, ccr, cep, color, depth, prev):
         """Scores des coups racine. Avec self.prune : le meilleur coup de l'itération précédente
-        d'abord, fenêtre pleine, puis les autres d'un lot avec la fenêtre (-inf, -score du premier) :
-        leurs scores sont alors des bornes hautes, l'argmax reste exact."""
+        d'abord, fenêtre pleine, puis les autres d'un lot avec la fenêtre (-inf, -score du premier).
+        Un autre coup qui dépasse le premier a un score exact ; sinon son score n'est qu'une borne
+        haute, peut-être égale à celle du premier : on la place strictement en dessous pour que
+        l'argmax ne choisisse jamais un coup réfuté (les scores sont entiers)."""
         if not self.prune:
             return -self.value(child, ccr, cep, -color, 1, depth - 1, self.qdepth)
         o = prev.argsort(descending=True, stable=True)
@@ -408,8 +410,10 @@ class Searcher:
         s[o[:1]] = -self.value(child[o[:1]], ccr[o[:1]], cep[o[:1]], -color, 1, depth - 1, self.qdepth)
         rest = o[1:]
         if len(rest):
-            s[rest] = -self.value(child[rest], ccr[rest], cep[rest], -color, 1, depth - 1, self.qdepth,
-                                  torch.full((len(rest),), -float("inf"), device=prev.device), -s[o[0]].expand(len(rest)))
+            s0 = s[o[0]]
+            r = -self.value(child[rest], ccr[rest], cep[rest], -color, 1, depth - 1, self.qdepth,
+                            torch.full((len(rest),), -float("inf"), device=prev.device), -s0.expand(len(rest)))
+            s[rest] = torch.where(r > s0, r, torch.minimum(r, s0) - 0.5)
         return s
 
     def search(self, B, cr, ep, color, budget, hard=None, min_depth=1, max_depth=64):

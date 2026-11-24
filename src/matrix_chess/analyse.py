@@ -198,7 +198,7 @@ def tirer_positions(parties, n, graine):
     return random.Random(graine).sample(cand, min(n, len(cand)))
 
 
-def filtrer(parties, n, graine, limite, procs, prune=False, waves="ybw", qdepth=4, depth=None, budget=1.0):
+def filtrer(parties, n, graine, limite, procs, prune=False, waves="ybw", qdepth=4, depth=None, budget=1.0, tri="mvv"):
     """Lignes du filtre : le coup du Searcher sur chaque position tirée, jugé par Stockfish."""
     import torch
 
@@ -209,7 +209,7 @@ def filtrer(parties, n, graine, limite, procs, prune=False, waves="ybw", qdepth=
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     if dev == "cpu":
         torch.set_num_threads(1)  # les petits lots CPU sont bien plus lents avec plusieurs threads
-    searcher = ge.Searcher(dev, qdepth=qdepth, prune=prune, waves=waves)
+    searcher = ge.Searcher(dev, qdepth=qdepth, prune=prune, waves=waves, tri=tri)
     rows, taches = [], []
     for p, i in tirer_positions(parties, n, graine):
         board = chess.Board()
@@ -253,6 +253,7 @@ def main():
     f.add_argument("--graine", type=int, default=0)
     f.add_argument("--prune", action="store_true", help="alpha-bêta par lots au lieu de la pleine largeur")
     f.add_argument("--waves", default="ybw", help="avec --prune : vagues de fils (Searcher.WAVES)")
+    f.add_argument("--tri", default="mvv", help="ordre des fils (Searcher.TRIS ; statique = incrément 1)")
     f.add_argument("--qdepth", type=int, default=4)
     f.add_argument("--depth", type=int, help="profondeur fixe du Searcher (sinon budget de temps)")
     f.add_argument("--budget", type=float, default=1.0, help="secondes par coup du Searcher")
@@ -267,7 +268,7 @@ def main():
         print(f"{len(parties)} parties, {len(coups)} demi-coups, {limite}, {a.procs} processus, "
               f"{time.perf_counter() - t0:.0f} s")
     else:
-        rows = filtrer(parties, a.n, a.graine, limite, a.procs, a.prune, a.waves, a.qdepth, a.depth, a.budget)
+        rows = filtrer(parties, a.n, a.graine, limite, a.procs, a.prune, a.waves, a.qdepth, a.depth, a.budget, a.tri)
         ecrire(a.sortie, rows)
         print(resume_filtre(rows))
 

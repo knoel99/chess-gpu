@@ -84,11 +84,12 @@ def main():
     ap.add_argument("--clock", type=float, default=180.0)
     ap.add_argument("--threads", type=int, default=1, help="threads Stockfish")
     ap.add_argument("--qdepth", type=int, default=4)
+    ap.add_argument("--max-nodes", type=int, default=None, help="plafond de nœuds stockés par recherche")
     ap.add_argument("--tag", default="", help="étiquette de la série, recopiée dans chaque résultat")
     ap.add_argument("--stop-after", type=int, default=0, help="arrêter après N niveaux sans point marqué")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    searcher = ge.Searcher(dev, qdepth=a.qdepth)
+    searcher = ge.Searcher(dev, qdepth=a.qdepth, max_nodes=a.max_nodes)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
     def log(rec):

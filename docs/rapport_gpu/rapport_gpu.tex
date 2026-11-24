@@ -47,6 +47,35 @@ matriciel, avec un critère de convergence ?} Ces deux questions ont des répons
 première porte sur le débit, la seconde sur la quantité de calcul utile. Tout le rapport tient
 dans l'écart entre les deux.
 
+\section{Glossaire}
+\begin{description}
+\item[Perft] Nombre exact de feuilles de l'arbre des coups légaux à une profondeur donnée. Les
+valeurs de référence publiées valident un générateur de coups, et la vitesse de calcul mesure le
+débit brut.
+\item[Kiwipete] Position de test de Peter McKenzie
+(\code{r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -}). Elle réunit les quatre
+roques, des prises en passant, des clouages et des échecs, avec 48 coups légaux au premier
+demi-coup. Son perft à la profondeur 6 vaut 8\,031\,647\,685.
+\item[Pleine largeur] Minimax qui développe tous les coups à chaque niveau, sans élagage.
+\item[Alpha-bêta] Minimax qui abandonne un sous-arbre dès qu'il ne peut plus influencer le choix,
+grâce à une fenêtre $[\alpha,\beta]$. Avec un tri parfait, il ne visite qu'environ $b^{d/2}$
+nœuds au lieu de $b^d$.
+\item[Fail-soft] Variante d'alpha-bêta qui renvoie la meilleure borne trouvée, même hors de la
+fenêtre. La valeur est exacte si $\alpha<v<\beta$, et sinon c'est une borne du bon côté.
+\item[YBW] \emph{Young Brothers Wait} (Feldmann) : parallélisation de l'alpha-bêta où l'on
+cherche d'abord le premier fils seul, l'aîné, puis tous les autres, les cadets, en parallèle avec
+la borne qu'il a fournie.
+\item[Vagues] Ici, découpe des fils d'un nœud, triés, en groupes de rangs traités par lots
+successifs : YBW, 1-2-4 ou hybride.
+\item[Quiescence] Prolongement de la recherche aux seules prises, jusqu'à une position calme, pour
+éviter l'effet d'horizon. Le \emph{stand pat} permet au camp au trait de ne pas prendre.
+\item[MVV/LVA] \emph{Most Valuable Victim, Least Valuable Attacker} : on joue d'abord les prises
+de la pièce la plus chère par la pièce la moins chère.
+\item[Facteur de branchement effectif] Rapport $N_d/N_{d-1}$ des nœuds visités entre deux
+profondeurs. Il vaut environ 35 en pleine largeur et tend vers $\sqrt{35}\approx6$ pour un
+alpha-bêta parfaitement trié.
+\end{description}
+
 \section{Génération des coups sur GPU}
 \paragraph{Données.} Un lot de $N$ positions, toutes avec le même camp au trait, est porté par
 trois tenseurs : les plateaux $B\in\mathbb{Z}^{N\times 65}$ en \code{int8} (64 cases et une

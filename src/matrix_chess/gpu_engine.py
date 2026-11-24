@@ -316,8 +316,12 @@ class Searcher:
     donc bornée que par le temps, et une itération trop longue est interrompue à la pendule.
     """
 
-    def __init__(self, dev, chunk=None, qdepth=4, prune=False, stagger=False):
-        self.dev, self.prune, self.stagger = dev, prune, stagger
+    WAVES = {"ybw": (0, 1), "hybride": (0, 1, 4), "1-2-4": (0, 1, 3, 7, 15, 31)}
+
+    def __init__(self, dev, chunk=None, qdepth=4, prune=False, waves="ybw"):
+        """waves : découpe des fils par rang en vagues successives (aîné seul, puis…), voir WAVES."""
+        self.dev, self.prune = dev, prune
+        self.waves = (*self.WAVES[waves], 1 << 30)
         self.chunk = chunk or (400_000 if dev == "cuda" else 20_000)
         self.qdepth = qdepth
         self.E = _eval_table(dev)
@@ -338,9 +342,10 @@ class Searcher:
     def value(self, B, cr, ep, color, ply, remaining, qleft, alpha=None, beta=None):
         """Valeurs negamax (N,) des positions, du point de vue du trait `color`.
 
-        Avec self.prune : alpha-bêta par lots (fenêtres alpha, beta (N,), fail-soft). Chaque parent
-        cherche d'abord son fils aîné (meilleure évaluation statique), puis tous les cadets d'un coup,
-        avec la fenêtre resserrée, s'il n'est pas déjà coupé (Young Brothers Wait). En quiescence, le
+        Avec self.prune : alpha-bêta par lots (fenêtres alpha, beta (N,), fail-soft). Les fils de chaque
+        parent, triés par évaluation statique, sont cherchés par vagues de rangs (self.waves) : l'aîné
+        seul, puis les suivants avec la fenêtre resserrée, seulement si le parent n'est pas déjà coupé
+        (Young Brothers Wait pour (0, 1) ; plus de vagues = moins de nœuds mais des lots plus petits). En quiescence, le
         stand pat coupe avant toute prise. La valeur est exacte si alpha < v < beta, sinon une borne du
         bon côté ; sans self.prune, c'est le negamax pleine largeur exact.
         """
@@ -373,13 +378,9 @@ class Searcher:
                 par, child, ccr, cep = par[o], child[o], ccr[o], cep[o]
                 first = torch.ones_like(par, dtype=torch.bool)
                 first[1:] = par[1:] != par[:-1]
-                if self.stagger:  # cadets par groupes de rangs 1, 2, 4, 8… (rangs [0], [1, 3), [3, 7)…)
-                    pos = torch.arange(len(par), device=dev)
-                    rank = pos - torch.cummax(torch.where(first, pos, 0), 0).values
-                    bounds = [0, 1, 3, 7, 15, 31, 1 << 30]
-                    stages = [(rank >= lo) & (rank < hi) for lo, hi in zip(bounds, bounds[1:])]
-                else:
-                    stages = [first, ~first]
+                pos = torch.arange(len(par), device=dev)
+                rank = pos - torch.cummax(torch.where(first, pos, 0), 0).values  # rang du coup chez son parent
+                stages = [(rank >= lo) & (rank < hi) for lo, hi in zip(self.waves, self.waves[1:])]
             else:
                 stages = [None]
             for k, sel in enumerate(stages):

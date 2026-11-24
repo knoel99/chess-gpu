@@ -359,39 +359,44 @@ class Searcher:
 
         full = [full_level(dict(B=B, cr=cr, ep=ep, parent=None), 0)]
         best, info = None, {}
-        for depth in range(1, max_depth + 1):
-            nodes = full[-1]
-            n, m, child, ccr, cep = expand_all(nodes["B"], nodes["cr"], nodes["ep"], side(depth - 1), self.chunk)
-            if depth == 1:
-                root_moves = m
-                if len(m) <= 1:
-                    return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
-            q = dict(B=child, cr=ccr, ep=cep, parent=n)
-            total = sum(len(lv["B"]) for lv in full) + len(n)
-            levels = full + [dict(q, stand=evaluate(child, side(depth), self.E), quiesce=True)]
-            for qi in range(self.qdepth):  # quiescence : prises seulement, depuis les feuilles
-                if not len(q["B"]) or total > self.max_nodes:
+        try:
+            for depth in range(1, max_depth + 1):
+                nodes = full[-1]
+                n, m, child, ccr, cep = expand_all(nodes["B"], nodes["cr"], nodes["ep"], side(depth - 1), self.chunk)
+                if depth == 1:
+                    root_moves = m
+                    if len(m) <= 1:
+                        return (to_move(m[0]) if len(m) else None), dict(depth=0, nodes=len(m), nps=0.0, score=0.0)
+                q = dict(B=child, cr=ccr, ep=cep, parent=n)
+                total = sum(len(lv["B"]) for lv in full) + len(n)
+                levels = full + [dict(q, stand=evaluate(child, side(depth), self.E), quiesce=True)]
+                for qi in range(self.qdepth):  # quiescence : prises seulement, depuis les feuilles
+                    if not len(q["B"]) or total > self.max_nodes:
+                        break
+                    c = side(depth + qi)
+                    qn, _, qb, qcr, qep = expand_all(q["B"], q["cr"], q["ep"], c, self.chunk, captures_only=True)
+                    q, total = dict(B=qb, cr=qcr, ep=qep, parent=qn), total + len(qn)
+                    levels.append(dict(q, stand=evaluate(qb, -c, self.E), quiesce=True))
+                score = -root_values(levels)
+                sync()
+                now = time.perf_counter()
+                elapsed, iter_time, seen = now - t0, now - t0 - (prev_iter or 0), seen + total
+                i = int(score.argmax())
+                best = to_move(root_moves[i])
+                info = dict(depth=depth, nodes=seen, nps=seen / max(elapsed, 1e-9), score=float(score[i]),
+                            time=elapsed)
+                full.append(full_level(dict(B=child, cr=ccr, ep=cep, parent=n), depth))
+                growth = len(child) / max(len(nodes["B"]), 1)
+                ratio = iter_time / prev_iter_time if prev_iter and prev_iter_time > 0.02 else growth
+                predicted = iter_time * max(ratio, 2.0)
+                prev_iter, prev_iter_time = elapsed, iter_time
+                if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget
+                                           or elapsed + predicted > hard or len(child) * growth > self.max_nodes):
                     break
-                c = side(depth + qi)
-                qn, _, qb, qcr, qep = expand_all(q["B"], q["cr"], q["ep"], c, self.chunk, captures_only=True)
-                q, total = dict(B=qb, cr=qcr, ep=qep, parent=qn), total + len(qn)
-                levels.append(dict(q, stand=evaluate(qb, -c, self.E), quiesce=True))
-            score = -root_values(levels)
-            sync()
-            now = time.perf_counter()
-            elapsed, iter_time, seen = now - t0, now - t0 - (prev_iter or 0), seen + total
-            i = int(score.argmax())
-            best = to_move(root_moves[i])
-            info = dict(depth=depth, nodes=seen, nps=seen / max(elapsed, 1e-9), score=float(score[i]),
-                        time=elapsed)
-            full.append(full_level(dict(B=child, cr=ccr, ep=cep, parent=n), depth))
-            growth = len(child) / max(len(nodes["B"]), 1)
-            ratio = iter_time / prev_iter_time if prev_iter and prev_iter_time > 0.02 else growth
-            predicted = iter_time * max(ratio, 2.0)
-            prev_iter, prev_iter_time = elapsed, iter_time
-            if depth >= min_depth and (abs(info["score"]) > MATE - 100 or elapsed > budget
-                                       or elapsed + predicted > hard or len(child) * growth > self.max_nodes):
-                break
+        except torch.OutOfMemoryError:  # itération trop grosse : on garde la profondeur précédente
+            if best is None:
+                raise
+            info["oom"] = True
         return best, info
 
 

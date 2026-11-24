@@ -1,4 +1,6 @@
-"""Figures du rapport GPU (docs/rapport_gpu/figs/*.pdf), calculées depuis results/matrix_chess/ :
+"""Figures (docs/rapport_gpu/figs/*.pdf) et tableaux (docs/rapport_gpu/tables/*.tex) du rapport GPU,
+calculés depuis results/matrix_chess/ : aucune valeur recopiée à la main.
+Sources :
 summary.csv (matchs), ab_gpu.csv (alpha-bêta contre pleine largeur), perft_gpu.csv (perft).
 
 Lancer depuis la racine : python docs/rapport_gpu/gen_figures.py
@@ -125,10 +127,73 @@ def fig_ab():
         save(fig, name)
 
 
+def sci(x, digits=2):
+    """1.34e9 -> $1{,}34\\cdot 10^{9}$ (typographie française)."""
+    m, e = f"{float(x):.{digits}e}".split("e")
+    return f"${m.replace('.', '{,}')}\\cdot 10^{{{int(e)}}}$"
+
+
+def fr(x, fmt):
+    return format(float(x), fmt).replace(".", "{,}")
+
+
+def write_table(name, header, rows, align):
+    os.makedirs(os.path.join(HERE, "tables"), exist_ok=True)
+    body = "\\\\\n".join(" & ".join(r) for r in rows)
+    tex = (f"\\begin{{tabular}}{{{align}}}\n\\toprule\n{' & '.join(header)}\\\\\n\\midrule\n"
+           f"{body}\\\\\n\\bottomrule\n\\end{{tabular}}\n")
+    open(os.path.join(HERE, "tables", name), "w").write(tex)
+
+
+def tables(rows):
+    tags = list(dict.fromkeys(r["tag"] for r in rows))
+    pts, n = defaultdict(float), defaultdict(int)
+    for r in rows:
+        pts[(r["tag"], r["elo"])] += float(r["our_score"])
+        n[(r["tag"], r["elo"])] += 1
+    body = []
+    for t in tags:
+        cells = [f"{fr(pts[(t, e)], 'g')}/{n[(t, e)]}" if n[(t, e)] else "--" for e in ELOS]
+        tot = sum(pts[(t, e)] for e in ELOS)
+        g = [r for r in rows if r["tag"] == t]
+        body.append([t.replace("_", "\\_")] + cells + [f"{fr(tot, 'g')}/{sum(n[(t, e)] for e in ELOS)}",
+                     sci(median(float(r['ours_nps']) for r in g), 1), fr(median(float(r['ours_depth']) for r in g), '.1f'),
+                     f"{median(float(r['sf_depth']) for r in g):.0f}"])
+    write_table("scores.tex", ["série"] + ELOS + ["total", "nœuds/s", "prof.", "prof. SF"], body, "l" + "c" * 7 + "rrrr")
+
+    ab = list(csv.DictReader(open(os.path.join(RES, "ab_gpu.csv"))))
+    pos = list(dict.fromkeys(r["pos"] for r in ab))
+    variants = ["pleine", "ybw", "hybride", "1-2-4"]
+
+    def cell(p, v, kind, d, q="4"):
+        m = [r for r in ab if (r["kind"], r["pos"], r["searcher"], r["d_or_budget"], r["qdepth"]) == (kind, p, v, d, q)]
+        return m[-1] if m else None
+
+    body = []
+    for p in pos:
+        for d in ("4", "6"):
+            row = [p if d == "4" else "", d]
+            for v in variants:
+                c = cell(p, v, "profondeur", d)
+                row.append(f"{sci(c['nodes'])} en {fr(c['seconds'], '.2f')}~s" if c else "--")
+            body.append(row)
+    write_table("ab_d6.tex", ["position", "d", "pleine largeur", "YBW", "hybride", "1-2-4"], body, "lccccc")
+
+    body = []
+    for p in pos:
+        row = [p]
+        for v in ["pleine", "ybw", "hybride", "1-2-4"]:
+            c = cell(p, v, "temps", "3.0")
+            row.append(f"{c['depth']} ({fr(c['seconds'], '.1f')}~s)" if c else "--")
+        body.append(row)
+    write_table("temps3s.tex", ["position", "pleine largeur", "YBW", "hybride", "1-2-4"], body, "lcccc")
+
+
 if __name__ == "__main__":
     rows = matches()
     fig_scores(rows)
     fig_speed_depth(rows)
     fig_perft()
     fig_ab()
-    print("figures écrites dans", FIGS)
+    tables(rows)
+    print("figures et tableaux écrits dans", HERE)

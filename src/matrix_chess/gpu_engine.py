@@ -68,7 +68,8 @@ def _consts(dev):
         rays, kn, kg, pw = _rays()
         geo = dict(rays=torch.tensor(rays, device=dev).view(64, 56), kn=torch.tensor(kn, device=dev),
                    kg=torch.tensor(kg, device=dev), pw={c: torch.tensor(v, device=dev) for c, v in pw.items()})
-        _cache[dev] = offs, lose.to(dev), torch.tensor(PROMOS, device=dev), geo
+        rank = torch.tensor([0, 1, 3, 3, 5, 9, 0], device=dev)  # roi : ne prend que des pièces non défendues
+        _cache[dev] = offs, lose.to(dev), torch.tensor(PROMOS, device=dev), geo, rank
     return _cache[dev]
 
 
@@ -146,7 +147,7 @@ def pseudo_planes(B, cr, ep, color, captures_only=False):
 
 def decode(mask, B, ep, color):
     """Masque (N, 70, 64) -> (parent (M,), coups (M, 6) f, t, k, ec, f2, t2, poussée double (M,))."""
-    offs, _, promos, _ = _consts(B.device)
+    offs, _, promos = _consts(B.device)[:3]
     n, p, f = mask.nonzero(as_tuple=True)
     t = f + offs[color][p]
     promo = (p >= 64) & (p < 68) & (t // 8 == (0 if color == WHITE else 7))
@@ -184,6 +185,16 @@ def _children(B, cr, kp, m, double, color):
 def expand(B, cr, ep, color, captures_only=False, count_only=False):
     """Enfants légaux du lot : (parent, coups, B', cr', ep'), ou leur nombre si count_only."""
     n, m, double = decode(pseudo_planes(B, cr, ep, color, captures_only), B, ep, color)
+    if captures_only:
+        # shortcut: quiescence sans alpha-bêta = arbre des prises complet, qui explose ; on ne garde que
+        # les prises d'une pièce au moins aussi chère (MVV/LVA), les promotions et les prises du roi.
+        # À remplacer par un SEE si la quiescence rate des gains de pièce.
+        rank = _consts(B.device)[4]
+        bn = B[n]
+        victim = rank[bn.gather(1, m[:, 1:2]).abs().long().squeeze(1)]
+        attacker = rank[bn.gather(1, m[:, :1]).abs().long().squeeze(1)]
+        keep = (victim >= attacker) | (m[:, 2] != 1) | (m[:, 3] != NONE)
+        n, m, double = n[keep], m[keep], double[keep]
     child, ok, ccr, cep = _children(B[n], cr[n], king_square(B, color)[n], m, double, color)
     if count_only:
         return int(ok.sum())
@@ -278,9 +289,10 @@ def _eval_table(dev):
     return E.to(dev)
 
 
-def evaluate(B, color, E):
-    """Évaluation (N,) du point de vue du camp `color` (negamax)."""
-    return color * E[B.long() + 6, torch.arange(65, device=B.device)].sum(1)
+def evaluate(B, color, E, chunk=8_000_000):
+    """Évaluation (N,) du point de vue du camp `color` (negamax), par morceaux (index int64 = 520 o/plateau)."""
+    sq_ = torch.arange(65, device=B.device)
+    return torch.cat([color * E[B[a:z].long() + 6, sq_].sum(1) for a, z in chunks(len(B), chunk)] or [E[:0, 0]])
 
 
 # --- recherche : negamax pleine largeur + quiescence, arbre développé niveau par niveau ---
@@ -311,6 +323,15 @@ class Searcher:
         self.E = _eval_table(dev)
         if dev == "cuda":
             enable_compile()
+            self.warmup()
+
+    def warmup(self):
+        """Compile les noyaux pour les deux camps, avec et sans quiescence, hors pendule."""
+        from .engine import Game
+        g = Game()
+        for mv in ((52, 36, None, None, None), (12, 28, None, None, None)):
+            self.search(*from_game(g, self.dev), g.turn, budget=0.0, min_depth=3, max_depth=3)
+            g.push(mv)
 
     def search(self, B, cr, ep, color, budget, min_depth=1, max_depth=64):
         t0 = time.perf_counter()

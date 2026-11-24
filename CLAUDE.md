@@ -23,6 +23,7 @@ python -m unittest src.matrix_chess.test_engine.TestKing -v # une classe de test
 python -m unittest src.matrix_chess.test_gpu_engine -v      # génération GPU : perft de référence, égalité python-chess, recherche
 python -m src.matrix_chess.bench_gpu [profondeur] [chunk]   # perft GPU contre `go perft` de Stockfish
 python -m src.matrix_chess.match --elos 1320,1500,max       # matchs 3+0 contre Stockfish bridé (results/matrix_chess/)
+python -m src.matrix_chess.duel --a "prune=1,waves=hybride" --b "…" -n 100 --clock 10 --inc 0.1  # duel ancien/nouveau, 2N parties, Elo ± IC 95 %
 python -m src.matrix_chess.validate [n_games] [seed]        # validation croisée vs python-chess (coups légaux, nulles)
 python -m unittest src.matrix_chess.test_analyse -v         # analyse Stockfish : formules, partie courte de bout en bout
 python -m src.matrix_chess.analyse parties games.txt --sortie DOSSIER   # évaluation Stockfish de chaque coup (coups.csv, parties.csv)

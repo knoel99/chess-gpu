@@ -566,35 +566,40 @@ def bitboard():
 
 
 def perft():
+    """Deux figures de natures différentes : les valeurs de référence recalculées ici sur processeur
+    (calcul préparatoire) et le débit mesuré sur GPU à l'incrément 1 (résultat de l'étude)."""
     g = Game()
     B, cr, ep = ge.from_game(g, DEV)
+    ref = [20, 400, 8902, 197281, 4865609]  # chessprogramming.org, « Perft Results »
     n = [ge.perft(B, cr, ep, WHITE, d) for d in range(1, 6)]
-    p = lire("2026-11-24_increment1-gpu", "donnees", "perft_gpu.csv")
-    d6 = int(next(x for x in p if x["position"] == "départ")["nodes"])
-    n.append(d6)
-    fig, ax = plt.subplots(1, 2, figsize=(9, 2.6))
-    ax[0].bar(range(1, 7), n, color=C[0])
-    ax[0].set_yscale("log")
+    assert n == ref
+    fig, ax = plt.subplots(figsize=(5, 2.5))
+    ax.bar(range(1, 6), n, color=C[0])
+    ax.set_yscale("log")
     for d, v in enumerate(n, 1):
-        ax[0].text(d, v * 1.4, f"{v:,}".replace(",", " "), ha="center", fontsize=6)
-    ax[0].set_xlabel("profondeur (demi-coups)"), ax[0].set_ylabel("positions (échelle log)")
-    ax[0].set_title("Perft depuis la position de départ", fontsize=8)
+        ax.text(d, v * 1.4, f"{v:,}".replace(",", " "), ha="center", fontsize=6.5)
+    ax.set_ylim(10, 5e7)
+    ax.set_xlabel("profondeur (demi-coups)"), ax.set_ylabel("positions (échelle log)")
+    ax.spines[["top", "right"]].set_visible(False)
+    save(fig, "perft_ref")
+    write("perft_ref", ", ".join(f"{v:,}".replace(",", "\\,") for v in n))
+
+    p = lire("2026-11-24_increment1-gpu", "donnees", "perft_gpu.csv")
     lab, vals, cs = [], [], []
     for r in p:
-        lab += [f"{r['position']}\nGPU", f"{r['position']}\nStockfish"]
+        lab += [f"{r['position']}, GPU", f"{r['position']}, Stockfish"]
         vals += [float(r["gpu_nps"]), float(r["sf_nps"])]
         cs += [C[0], C[1]]
-    ax[1].barh(range(len(vals)), vals, color=cs)
-    ax[1].set_xscale("log"), ax[1].invert_yaxis()
-    ax[1].set_yticks(range(len(vals)), lab, fontsize=6)
+    fig, ax = plt.subplots(figsize=(6.5, 2.1))
+    ax.barh(range(len(vals)), vals, color=cs)
+    ax.set_xscale("log"), ax.invert_yaxis()
+    ax.set_yticks(range(len(vals)), lab, fontsize=7)
     for i, v in enumerate(vals):
-        ax[1].text(v * 1.2, i, f"{v:.1e}", va="center", fontsize=6)
-    ax[1].set_xlabel("positions par seconde (perft 6)")
-    ax[1].set_xlim(1e7, 1e12)
-    ax[1].set_title("Débit : RTX PRO 6000 contre Stockfish 1 thread", fontsize=8)
-    for a in ax:
-        a.spines[["top", "right"]].set_visible(False)
-    save(fig, "perft")
+        ax.text(v * 1.2, i, f"{v:.1e}".replace(".", ","), va="center", fontsize=6.5)
+    ax.set_xlabel("positions par seconde, perft en profondeur 6")
+    ax.set_xlim(1e7, 1e12)
+    ax.spines[["top", "right"]].set_visible(False)
+    save(fig, "exp_debit")
     k = next(x for x in p if x["position"] == "kiwipete")
     write("perft", f"{fr(float(k['gpu_nps']) / float(k['sf_nps']), '.0f')}")
 

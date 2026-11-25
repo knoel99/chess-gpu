@@ -9,12 +9,12 @@
 \usepackage{array}
 \usepackage{graphicx}
 \usepackage{float}
-\usepackage{needspace}
 \usepackage{enumitem}
+\usepackage{fancyvrb}
 \usepackage[skins,breakable]{tcolorbox}
-\usepackage[font=small,labelfont=bf,labelsep=period]{caption}
-\frenchsetup{StandardItemLabels=true}
+\usepackage[font={small,it},labelfont={bf,up},labelsep=period]{caption}
 \usepackage[hidelinks]{hyperref}
+\frenchsetup{StandardItemLabels=true}
 
 \setlength{\emergencystretch}{3em}
 \setlist{itemsep=2pt,topsep=4pt}
@@ -23,59 +23,123 @@
 \definecolor{bleu}{HTML}{2a78d6}
 \definecolor{orange}{HTML}{eb6834}
 \definecolor{vert}{HTML}{1baf7a}
-\newtcolorbox{retenir}{breakable,enhanced,colback=bleu!5,colframe=bleu!70,boxrule=0.6pt,arc=2pt,
-  left=6pt,right=6pt,top=4pt,bottom=4pt,title=À retenir,fonttitle=\bfseries\small,coltitle=white}
-\newtcolorbox{exemple}[1]{breakable,enhanced,colback=orange!4,colframe=orange!75,boxrule=0.6pt,arc=2pt,
-  left=6pt,right=6pt,top=4pt,bottom=4pt,title={Exemple : #1},fonttitle=\bfseries\small,coltitle=white}
-\newtcolorbox{hypo}[1]{breakable,enhanced,colback=vert!5,colframe=vert!75,boxrule=0.6pt,arc=2pt,
-  left=6pt,right=6pt,top=4pt,bottom=4pt,title={#1},fonttitle=\bfseries\small,coltitle=white}
+\definecolor{gris}{HTML}{52514e}
+\newtcolorbox{note}{breakable,enhanced,colback=bleu!4,colframe=bleu!4,borderline west={2.5pt}{0pt}{bleu},
+  boxrule=0pt,arc=0pt,left=10pt,right=6pt,top=4pt,bottom=4pt}
+\DefineVerbatimEnvironment{python}{Verbatim}{fontsize=\small,frame=leftline,framesep=8pt,
+  rulecolor=\color{gris!40},xleftmargin=6pt}
+\newcounter{calcul}
+\newcommand{\calcul}[2]{\refstepcounter{calcul}\subsection*{Calcul \thecalcul. #1}%
+  \addcontentsline{toc}{subsection}{Calcul \thecalcul. #1}%
+  \noindent\textcolor{gris}{\small Vérifie la section~\ref{#2}.}\par\smallskip}
+\renewcommand{\thepart}{\Roman{part}}
 
 \title{Jouer aux échecs avec des matrices\\[4pt]
-\large Du plateau au GPU : la théorie pas à pas, les expériences et les pistes\\[2pt]
+\large Écrire les règles en algèbre linéaire, les exécuter sur GPU, et mesurer ce que cela vaut\\[2pt]
 \normalsize Rapport de synthèse du projet \code{chess-gpu}}
 \author{Branche \code{claude/zen-pasteur-vjg9yx}}
 \date{25 novembre 2026}
-
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Ce projet part d'une idée simple. Une position d'échecs est une matrice d'entiers, un coup est une
-autre matrice, et jouer un coup revient à les multiplier. Si tout s'écrit ainsi, une carte
-graphique, conçue pour multiplier des matrices en masse, doit pouvoir explorer des millions de
-positions par seconde. Ce rapport reprend le projet depuis le début. Chaque notion part d'un
-exemple sur l'échiquier et aboutit à son écriture formelle. Il traite dans l'ordre le codage des
-positions, les déplacements vus comme des décalages, les coups vus comme des matrices
-$64\times64$, l'inversion et l'analyse rétrograde, le calcul par lots sur GPU, puis la recherche du
-meilleur coup vue comme une convergence d'intervalles. Les expériences sont résumées en cinq fils
-conducteurs. Le GPU compte les positions 157 fois plus vite que Stockfish sur un cœur, mais la
-force de jeu dépend surtout de la profondeur atteinte, donc de l'élagage et du tri des coups. Le
-rapport se termine par sept hypothèses pour la suite, chacune avec son protocole de mesure.
+\noindent\textbf{Contexte.} Un moteur d'échecs classique parcourt l'arbre des coups avec des
+boucles et des tests, sur processeur. Une carte graphique, elle, applique la même opération à des
+millions de données en parallèle.
+
+\smallskip\noindent\textbf{Objectif.} Nous avons voulu savoir si l'on peut écrire toutes les
+règles des échecs en opérations matricielles, les exécuter par lots sur GPU, et obtenir ainsi un
+moteur plus rapide, puis plus fort, que Stockfish.
+
+\smallskip\noindent\textbf{Méthode.} Nous codons une position par un vecteur de 64 entiers, un
+déplacement par un décalage de matrice, et un coup par une matrice $64\times64$. Nous en tirons
+une génération de coups par lots, une recherche écrite dans le semi-anneau $(\max,+)$, et un
+alpha-bêta exact formulé comme une convergence d'intervalles. Nous vérifions chaque écriture par
+un calcul du moteur sur processeur. Nous mesurons ensuite le débit par le test \emph{perft}, et
+la force par des matchs contre Stockfish 16 et par un duel de 200 parties entre deux versions du
+moteur, sur une RTX PRO 6000.
+
+\smallskip\noindent\textbf{Résultats.} Sur la position Kiwipete, le GPU compte les positions
+157 fois plus vite que Stockfish sur un cœur. Ce débit ne suffit pas, car la recherche en pleine
+largeur plafonne à 4 à 6 demi-coups et marque 5,5 points sur 14. L'alpha-bêta par lots porte ce
+score à 7,5 sur 14. Le tri des coups, les vagues adaptatives et la gestion du temps ajoutent
+ensuite $+127$ Elo, avec un intervalle de confiance à 95~\% de $[+90 ; +167]$. Nos parties se
+perdent entre les coups 11 et 20.
+
+\smallskip\noindent\textbf{Conclusion.} Les échecs s'écrivent entièrement en matrices, et ce
+calcul est très rapide sur GPU. La force de jeu dépend pourtant de la profondeur atteinte, donc de
+la sélection des coups. Nous proposons sept hypothèses pour la suite, chacune avec son protocole
+de mesure.
 \end{abstract}
 
 \tableofcontents
 
-\section*{Comment lire ce rapport}
-\addcontentsline{toc}{section}{Comment lire ce rapport}
-Chaque partie montre d'abord une position sur l'échiquier, puis écrit la même chose en matrices.
-La complexité augmente d'une partie à l'autre. On passe d'une case à une pièce, puis à un coup, à
-une partie entière, à des millions de positions, et enfin à la recherche du meilleur coup. Trois
-sortes d'encadrés ponctuent le texte.
-\begin{itemize}
-\item Les encadrés \textcolor{orange}{\textbf{Exemple}} donnent un cas chiffré, calculé par le
-moteur.
-\item Les encadrés \textcolor{bleu}{\textbf{À retenir}} résument une partie en quelques lignes.
-\item Les encadrés \textcolor{vert}{\textbf{Hypothèse}} proposent une piste pour la suite.
-\end{itemize}
-Le script \code{gen\_figures.py}, placé à côté de ce fichier, appelle directement
-\code{src/matrix\_chess} pour produire les figures et les exemples chiffrés. Une seule courbe
-reprend des valeurs publiées ailleurs, la perte par profondeur de la partie~7, tirée du rapport de
-l'incrément~1. Les résultats de matchs cités dans le texte viennent des rapports des incréments.
+% =====================================================================================================
+\section*{Vue d'ensemble}
+\addcontentsline{toc}{section}{Vue d'ensemble}
+
+Ce rapport reprend le projet \code{chess-gpu} depuis le début. Il s'adresse à un lecteur qui
+connaît les règles des échecs et le produit de matrices, sans plus. Il est divisé en quatre
+parties, dont les affirmations n'ont pas le même statut.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{6.2cm}}
+\toprule
+Partie & Ce que vous y trouvez & Comment c'est établi\\
+\midrule
+\textbf{I. Théorie} & Les définitions, les formules et leurs propriétés, illustrées par des
+schémas. & Par le raisonnement. Rien n'y dépend d'une mesure.\\
+\textbf{II. Calculs préparatoires} & Les exemples chiffrés et les tests de conformité qui
+vérifient la théorie. & Par un calcul exact du moteur, sur processeur. Le résultat est le même à
+chaque exécution.\\
+\textbf{III. Résultats de l'étude} & Le débit sur GPU, les matchs contre Stockfish, la qualité
+des coups, le duel. & Par des mesures sur GPU et des parties jouées. Elles ont une incertitude.\\
+\textbf{IV. Discussion} & Les leçons, les limites et sept hypothèses pour la suite. & Par
+l'interprétation des résultats. Les hypothèses ne sont pas encore mesurées.\\
+\bottomrule
+\end{tabular}
+\caption{Les quatre parties du rapport et le statut de ce qu'elles affirment.}
+\end{table}
+
+\begin{note}
+Chaque calcul de la partie~II renvoie à la section de théorie qu'il vérifie. Vous pouvez lire la
+théorie d'une traite, puis les calculs, ou passer de l'une aux autres section par section. Les
+termes \emph{perft}, \emph{Kiwipete}, \emph{YBW}, \emph{MVV/LVA} ou \emph{fail-soft} sont définis
+dans le glossaire, en annexe~B. Les notations sont rassemblées en annexe~A.
+\end{note}
+
+Vous pouvez tout reproduire. Les extraits de code s'exécutent tels quels depuis la racine du
+dépôt. Le script \code{gen\_figures.py}, placé à côté de ce fichier, produit les figures et les
+valeurs de la partie~II en appelant \code{src/matrix\_chess}.
 
 % =====================================================================================================
-\section{Le parcours en une page}
+\section{Introduction : pourquoi écrire les échecs en matrices}
 
+\subsection*{L'anatomie d'un moteur d'échecs}
+Un moteur fait trois choses. Il \emph{génère} les coups légaux d'une position. Il \emph{évalue}
+une position par un nombre, positif si elle favorise le camp au trait. Il \emph{cherche}, en
+explorant l'arbre des coups, celui qui mène à la meilleure évaluation.
+
+Stockfish fait tout cela sur processeur, une position après l'autre. Il visite quelques millions
+de positions par seconde et par cœur, mais il choisit avec soin celles qu'il visite. Une carte
+graphique fonctionne à l'opposé. Elle traite des millions de positions en même temps, à
+condition que le calcul soit le même pour toutes, sans boucle ni test propre à une position.
+
+\subsection*{Ce que nous avons voulu vérifier}
+Nous sommes partis de trois questions, dans cet ordre.
+\begin{itemize}
+\item \textbf{Peut-on écrire toutes les règles en matrices ?} C'est la condition pour que le
+calcul soit identique d'une position à l'autre. Les parties~I et~II y répondent.
+\item \textbf{Le GPU va-t-il alors plus vite que Stockfish ?} Nous comparons le nombre de
+positions comptées par seconde. La partie~III y répond.
+\item \textbf{Ce débit donne-t-il un moteur plus fort ?} Nous comparons les résultats en partie.
+La partie~III y répond aussi.
+\end{itemize}
+La réponse est oui aux deux premières et non à la troisième. La partie~IV explique pourquoi.
+
+\subsection*{Le parcours du projet}
 Le projet a avancé en quatre étapes. Chacune a répondu à une question et en a soulevé une autre.
 
 \begin{table}[H]
@@ -104,19 +168,25 @@ contre celui de l'incrément 1, sur 200 parties.\\
 \caption{Les quatre étapes du projet. Chaque étude a son dossier daté dans \code{docs/etudes/}.}
 \end{table}
 
-Le calcul matriciel donne un débit très élevé. L'essentiel du travail a consisté à transformer ce
-débit en profondeur de recherche. Les parties~2 à~5 expliquent d'où vient le débit. La partie~6
-montre comment on le convertit en profondeur. Les parties~7 et~8 disent ce que les expériences en
-ont appris et ce qu'il reste à essayer.
-
 % =====================================================================================================
-\section{Une position est une matrice}
+\clearpage
+\part{Théorie : écrire les échecs en matrices}
 
-\subsection{Coder les pièces par des entiers}
-On numérote les six sortes de pièces : pion $1$, cavalier $2$, fou $3$, tour $4$, dame $5$,
+Cette partie ne contient que des définitions, des formules et des schémas. Aucune mesure n'y
+intervient. Elle avance par complexité croissante, de la case au coup, du coup à la partie, de la
+partie au lot de positions, puis à la recherche du meilleur coup.
+
+\section{La position et les déplacements}
+
+\subsection{Une position est une matrice}\label{th:position}
+Nous numérotons les six sortes de pièces : pion $1$, cavalier $2$, fou $3$, tour $4$, dame $5$,
 roi $6$. Une pièce blanche garde son nombre, une pièce noire prend le signe moins, et une case vide
 vaut $0$. Le plateau devient une matrice $B\in\mathbb{Z}^{8\times8}$. La ligne $i=0$ est la
 rangée~8, en haut, du côté des noirs. La colonne $j=0$ est la colonne~a.
+
+Pour multiplier par une matrice, nous rangeons ensuite les 64 cases dans un vecteur
+$b\in\mathbb{Z}^{64}$, ligne après ligne. La case $(i,j)$ reçoit l'indice $8i+j$. Ainsi a8 vaut~0,
+h8 vaut~7, a1 vaut~56 et h1 vaut~63.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/plateau.pdf}
@@ -124,33 +194,14 @@ rangée~8, en haut, du côté des noirs. La colonne $j=0$ est la colonne~a.
 positives (pièces blanches), les cases orange sont négatives (pièces noires).}
 \end{figure}
 
-La matrice se lit comme l'échiquier. Sa première ligne, $(-4,-2,-3,-5,-6,-3,-2,-4)$, donne la
-rangée~8 des noirs dans l'ordre tour, cavalier, fou, dame, roi, fou, cavalier, tour. Les quatre
-lignes centrales sont nulles. Le signe indique la couleur, la valeur absolue indique la pièce.
-
-\subsection{Aplatir en un vecteur}
-Pour multiplier par une matrice, on range les 64 cases dans un vecteur $b\in\mathbb{Z}^{64}$, ligne
-après ligne. La case $(i,j)$ reçoit l'indice $8i+j$. Ainsi a8 vaut~0, h8 vaut~7, a1 vaut~56 et h1
-vaut~63.
-\[ \input{gen/vecteur}\unskip \]
-C'est l'ordre que \code{numpy} utilise pour \code{B.reshape(64)}, si bien qu'aucune conversion n'est
-nécessaire.
-
-\begin{retenir}
-Une position est un vecteur $b$ de 64 entiers. Le signe d'une valeur donne la couleur, sa valeur
-absolue donne la pièce. Le trait, les droits de roque et la case de prise en passant sont stockés à
-part, dans l'objet \code{Game}.
-\end{retenir}
-
-% =====================================================================================================
-\section{Un déplacement est un décalage}
-
-\subsection{Le décalage, opération de base}
-Plaçons un 1 sur la case d4 et des 0 partout ailleurs. On obtient une matrice $P$ qui marque une
-pièce. Décaler $P$ d'une ligne vers le haut marque la case d5. Décaler $P$ de deux lignes vers le
-haut et d'une colonne vers la droite marque e6, soit un saut de cavalier. On note
-$\shift(P, d_r, d_c)$ le décalage de $d_r$ lignes et de $d_c$ colonnes, où des zéros entrent par
-le bord.
+\subsection{Un déplacement est un décalage}\label{th:decalage}
+Placez un 1 sur la case d4 et des 0 partout ailleurs. Vous obtenez une matrice $P$ qui marque une
+pièce. Décaler $P$ d'une ligne vers le haut marque d5. La décaler de deux lignes vers le haut et
+d'une colonne vers la droite marque e6, soit un saut de cavalier. Nous notons
+$\shift(P, d_r, d_c)$ ce décalage, où des zéros entrent par le bord. Le décalage est lui-même un
+produit de matrices. Si $S_d$ désigne la matrice $8\times8$ qui porte des 1 sur sa $d$-ième
+diagonale, alors
+\[ \shift(M, d_r, d_c) = S_{d_r}\, M\, S_{d_c}^{\top}. \]
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/decalage.pdf}
@@ -158,39 +209,35 @@ le bord.
 huit pions blancs.}
 \end{figure}
 
-Le décalage est lui-même un produit de matrices. Soit $S_d$ la matrice $8\times8$ qui porte des 1
-sur sa $d$-ième diagonale. Alors
-\[ \input{gen/shiftS} \]
-Le script vérifie cette égalité pour les 16 décalages utiles, soit les 8 directions du roi et les
-8 sauts du cavalier. Le reste du moteur repose sur deux conséquences.
+Le reste du moteur repose sur deux conséquences.
 \begin{itemize}
 \item \textbf{Les bords ne demandent aucun test.} Ce qui sort du plateau sort de la matrice et
-disparaît. Aucun \code{if} ne vérifie qu'une case existe.
-\item \textbf{Un décalage agit sur toutes les pièces en même temps.} La figure le montre avec les
-pions. Il agit de la même façon sur des millions de plateaux, ce que le GPU exploitera.
+disparaît.
+\item \textbf{Un décalage agit sur toutes les pièces en même temps.} Il agit de la même façon sur
+des millions de plateaux, ce que le GPU exploitera.
 \end{itemize}
 
-\subsection{Le roi : une convolution}
-Le roi avance d'une case dans l'une des huit directions. Ses destinations forment donc l'union de
-huit décalages de $P$. Écrite comme une somme pondérée, cette union est une convolution par le
-noyau
-\[ \input{gen/noyau_roi}\unskip \]
+\subsection{Le roi et le cavalier : des convolutions}\label{th:roi}
+Le roi avance d'une case dans l'une des huit directions. Ses destinations forment l'union de huit
+décalages de $P$, c'est-à-dire une convolution de $P$ par un noyau $3\times3$ rempli de 1, sauf
+en son centre. Le cavalier suit le même principe, avec huit sauts et un noyau $5\times5$.
+
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/roi_cavalier.pdf}
 \caption{En haut, le roi. Au centre, il atteint 8 cases. Dans le coin, les décalages qui sortent du
 plateau s'annulent et il en reste 3. Appliqués à un plateau rempli de 1, les huit décalages
 comptent les cases atteignables depuis chaque case. En répétant la dilatation, on obtient la
 distance du roi, c'est-à-dire la distance de Chebyshev $\max(|\Delta i|,|\Delta j|)$. En bas, le
-cavalier. Ses huit sauts forment une convolution par un noyau $5\times5$.}
+cavalier.}
 \end{figure}
 
-\subsection{Les pièces glissantes : une propagation}
+\subsection{Les pièces glissantes : une propagation}\label{th:glisseur}
 La tour, le fou et la dame avancent jusqu'à la première pièce rencontrée. Un seul décalage ne
-suffit pas à l'écrire. On propage donc un front, pas à pas :
+suffit pas. Nous propageons un front, pas à pas :
 \[ \text{front}_1 = \shift(P, d),\qquad \text{front}_{k+1} = \shift(\text{front}_k \wedge
 \text{vide},\ d),\qquad A = \bigvee_{k=1}^{7}\text{front}_k. \]
 Le terme $\wedge\,\text{vide}$ arrête le front sur la première pièce rencontrée. Le front atteint
-cette pièce sans la traverser. On retire ensuite les cases occupées par des pièces amies :
+cette pièce sans la traverser. Nous retirons ensuite les cases occupées par des pièces amies :
 \[ \text{coups} = A \wedge (\text{vide} \vee \text{adverse}). \]
 
 \begin{figure}[H]
@@ -204,50 +251,31 @@ retire b4, qui porte une pièce amie, et garde d7 et g4, qui sont des prises.}
 Chaque direction demande au plus 7 pas. Le fou suit les 4 diagonales, la tour les 4 directions
 orthogonales, la dame les 8.
 
-\subsection{Les pions, le roque et la prise en passant}
+\subsection{Les pions, le roque et l'échec}\label{th:echec}
 Les pions ne se déplacent pas comme ils prennent, mais leurs coups restent des décalages assortis
-de conditions.
-\begin{itemize}
-\item Avance simple des blancs : $\shift(\text{pions}, -1, 0) \wedge \text{vide}$.
-\item Avance double : depuis la rangée de départ, si les deux cases sont vides.
-\item Prises : les deux décalages diagonaux, restreints aux pièces adverses et à la case de prise
-en passant.
-\end{itemize}
-Le roque se vérifie en lisant quelques cases. Le roi et la tour doivent être à leur place, les
-cases entre eux vides, les droits de roque intacts, et aucune case traversée par le roi ne doit
-être attaquée.
+de conditions. L'avance simple des blancs s'écrit $\shift(\text{pions}, -1, 0) \wedge
+\text{vide}$. L'avance double exige en plus la rangée de départ et deux cases vides. Les prises
+sont les deux décalages diagonaux, restreints aux pièces adverses et à la case de prise en
+passant. Le roque se vérifie en lisant quelques cases.
 
-\subsection{L'attaque et l'échec}
 Le masque des cases attaquées par les blancs, $\mathrm{att}_{\text{blancs}}$, est l'union des
 masques de toutes leurs pièces. Le roi noir est en échec si ce masque contient sa case. En
-matrices, on fait un produit élément par élément, puis une somme :
+matrices, c'est un produit élément par élément, puis une somme :
 \[ \text{échec} \iff \sum_{i,j} \bigl(\mathrm{att}_{\text{blancs}} \odot [B = -6]\bigr)_{ij} > 0. \]
 
-\begin{exemple}{le coup du berger}
-Après 1.e4 e5 2.Fc4 Cc6 3.Dh5 Cf6 4.Dxf7, le moteur calcule
-\[ \input{gen/echec}\unskip \]
-Le roi est attaqué et aucun coup légal ne pare l'échec. Il est mat.
-\end{exemple}
+\begin{note}
+\textbf{À retenir.} Une position est un vecteur de 64 entiers. Toutes les règles de déplacement
+s'écrivent avec des décalages et des opérations logiques case par case, sans boucle sur les
+pièces ni test de bord. La même formule s'applique à un plateau seul ou à un lot de plateaux de
+forme $(N, 8, 8)$.
+\end{note}
 
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/echec.pdf}
-\caption{Le test d'échec en trois matrices. Les cases attaquées, la case du roi, puis leur
-produit, qui contient un seul 1, en e8.}
-\end{figure}
+\section{Les coups}
 
-\begin{retenir}
-Toutes les règles de déplacement s'écrivent avec des décalages et des opérations logiques case
-par case. Le moteur ne boucle pas sur les pièces et ne teste jamais les bords. La même formule
-s'applique à un plateau seul ou à un lot de plateaux de forme $(N, 8, 8)$.
-\end{retenir}
-
-% =====================================================================================================
-\section{Un coup est une matrice}
-
-\subsection{Le coup simple : e2-e4}
+\subsection{Un coup est une matrice}\label{th:coup}
 Jouer e2-e4, c'est vider e2 et poser en e4 ce qui se trouvait en e2. Soit $f$ la case de départ,
-$t$ la case d'arrivée, et $E_{ab}$ la matrice qui contient un seul 1, en ligne $a$ et colonne $b$.
-Alors
+$t$ la case d'arrivée, et $E_{ab}$ la matrice $64\times64$ qui contient un seul 1, en ligne $a$
+et colonne $b$. Alors
 \[ T = I - E_{ff} - E_{tt} + E_{tf},\qquad b' = T\,b. \]
 \begin{itemize}
 \item $-E_{ff}$ annule la ligne $f$, et la case de départ devient vide.
@@ -262,110 +290,55 @@ l'identité (diagonale grise). Sa diagonale s'annule en e2 et en e4 (rouge), et 
 se trouve hors de la diagonale (bleu), en ligne e4 et colonne e2.}
 \end{figure}
 
-Restreinte aux cases qui changent, la matrice tient en quelques lignes :
-\input{gen/coup_pion}\unskip
+Une matrice de retour $R = I - E_{ff} - E_{tt} + E_{ft}$ défait le déplacement. Elle remet en $f$
+ce qui se trouve en $t$.
 
-La matrice $R$ défait le coup. Elle remet en $f$ ce qui se trouve en $t$. Le rang 63 signifie
-qu'une dimension est perdue, celle du contenu de la case d'arrivée, ici une case vide.
+\subsection{La prise et les coups spéciaux}\label{th:speciaux}
+\textbf{La prise.} Une prise a la même matrice qu'un coup simple. Seul $b$ diffère, car la case
+$t$ n'était pas vide. Le terme $-E_{tt}$ efface alors une pièce. La matrice $T$ est singulière,
+et la pièce prise appartient à son noyau. Revenir en arrière demande donc une information que $T$
+a effacée.
 
-\subsection{La prise : l'information détruite}
-Une prise a la même matrice qu'un coup simple. Seul $b$ diffère, car la case $t$ n'était pas
-vide. Le terme $-E_{tt}$ efface alors une pièce.
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/coup_prise.pdf}
-\caption{1.e4 d5 2.exd5. La matrice a la même forme que pour e2-e4. La ligne $t$ de $T$ efface le
-pion noir de d5.}
-\end{figure}
-\input{gen/coup_prise}\unskip
-
-Voilà pourquoi on ne peut pas inverser $T$. Elle est singulière, et la pièce prise appartient à
-son noyau. Revenir en arrière demande une information que $T$ a effacée.
-
-\subsection{La promotion : un coefficient}
-Pour changer un pion en dame, on remplace le 1 de $E_{tf}$ par un coefficient $k$, ce qui donne
+\textbf{La promotion.} Nous remplaçons le 1 de $E_{tf}$ par un coefficient $k$, ce qui donne
 $T = I - E_{ff} - E_{tt} + k\,E_{tf}$. Le pion blanc vaut $+1$, donc la case d'arrivée reçoit
-$k\cdot(+1) = +5$, une dame. Un pion noir donne $k\cdot(-1) = -5$. Le même coefficient sert aux
-deux camps.
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/coup_promotion.pdf}
-\caption{a7xb8=D, une promotion avec prise. Le coefficient bleu vaut 5.}
-\end{figure}
-\input{gen/coup_promotion}\unskip
+$k\cdot(+1) = +5$, une dame. Un pion noir donne $-5$. Le même coefficient sert aux deux camps, et
+le retour divise par $k$.
 
-Le retour divise par $k$. La matrice $R$ contient $\tfrac15$, qui change la dame en pion.
+\textbf{La prise en passant.} Le pion pris se trouve à côté de la case d'arrivée. Nous ajoutons
+$-E_{cc}$ pour vider cette troisième case $c$.
 
-\subsection{La prise en passant : une case de plus}
-Le pion qui prend en passant arrive sur une case vide, et le pion pris se trouve à côté. On ajoute
-$-E_{cc}$ pour vider cette troisième case $c$, d'où
-$T = I - E_{ff} - E_{tt} - E_{cc} + E_{tf}$.
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/coup_enpassant.pdf}
-\caption{1.e4 a6 2.e5 d5 3.exd6 e.p. Trois cases changent. La case e5 se vide, d6 reçoit le pion
-blanc et d5 perd le pion noir.}
-\end{figure}
-\input{gen/coup_enpassant}\unskip
-
-\subsection{Le roque : deux déplacements dans une matrice}
-Le roque déplace le roi et la tour. On superpose deux coups simples dans la même matrice :
+\textbf{Le roque.} Nous superposons deux coups simples, celui du roi et celui de la tour, dans la
+même matrice :
 \[ T = I - E_{ff} - E_{tt} + E_{tf} - E_{f'f'} - E_{t't'} + E_{t'f'}. \]
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/coup_roque.pdf}
-\caption{Petit roque blanc, roi e1-g1 et tour h1-f1. La matrice a deux coefficients hors de la
-diagonale.}
-\end{figure}
-\input{gen/coup_roque}\unskip
 
-\subsection{Une partie est un produit de matrices}
-Jouer $n$ coups revient à multiplier $n$ matrices, $b_n = T_n \cdots T_1\, b_0 = G\, b_0$. La
-matrice $G$ résume la partie entière. Chacune de ses lignes contient au plus un coefficient non
-nul, et deux lignes n'en ont jamais dans la même colonne. On appelle une telle matrice une
-\emph{permutation partielle pondérée}. Elle se stocke dans deux plateaux d'étiquettes. Pour chaque
-case $i$, $\mathrm{src}_i$ indique de quelle case initiale vient son contenu, et
-$\mathrm{coef}_i$ le facteur qui le multiplie, soit 0 si la case a été vidée et $k$ après une
-promotion. On a alors $b_n[i] = \mathrm{coef}_i\cdot b_0[\mathrm{src}_i]$, sans aucune matrice
-$64\times64$.
+\subsection{Une partie est un produit de matrices}\label{th:partie}
+Jouer $n$ coups revient à multiplier $n$ matrices, $b_n = T_n \cdots T_1\, b_0 = G\, b_0$. Chaque
+ligne de $G$ contient au plus un coefficient non nul, et deux lignes n'en ont jamais dans la même
+colonne. Une telle matrice est une \emph{permutation partielle pondérée}. Elle se stocke dans deux
+plateaux d'étiquettes. Pour chaque case $i$, $\mathrm{src}_i$ indique de quelle case initiale
+vient son contenu, et $\mathrm{coef}_i$ le facteur qui le multiplie, soit 0 si la case a été
+vidée et $k$ après une promotion. On a alors
+\[ b_n[i] = \mathrm{coef}_i\cdot b_0[\mathrm{src}_i], \]
+sans aucune matrice $64\times64$. Le rang de $G$ est le nombre de ses lignes non nulles. Ses
+colonnes nulles désignent ce que la partie a effacé.
 
-\begin{exemple}{la partie espagnole, variante d'échange}
-1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fxc6 dxc6. Le produit des huit matrices donne $G$.
-\input{gen/composition}\unskip
-\end{exemple}
+\subsection{Revenir en arrière}\label{th:retour}
+Un coup sans prise s'inverse sans difficulté, car $R\,T\,b = b$. Avec une prise, il manque la
+pièce effacée. Trois écritures traitent ce cas.
 
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/composition.pdf}
-\caption{À gauche, l'étiquette de chaque case. En e4, « ←e2 » signifie que le contenu de e4 vient
-de la case initiale e2. « 0 » marque une case vidée. En c6, l'étiquette « ←d7 » indique que le pion
-a pris le fou, lui-même venu de f1. La colonne f1 de $G$ est donc nulle, et plus aucune ligne de
-$G$ ne transporte le fou.}
-\end{figure}
+\textbf{L'inverse affine.} Nous conservons à part la liste des pièces prises. Le retour s'écrit
+$b = R\,b' + \text{correction}$, où la correction remet la pièce prise sur sa case.
 
-Le rang de $G$ est le nombre de ses lignes non nulles, et chaque case vidée en retire une. Parmi
-les colonnes nulles, celles qui portaient une pièce au départ correspondent aux pièces prises.
+\textbf{Le cimetière.} Nous ajoutons au vecteur 30 cases, une par pièce capturable, ce qui donne
+$x\in\mathbb{Z}^{94}$. Une prise devient un cycle de trois cases. La pièce qui prend va en $t$, la
+pièce prise va au cimetière, et la case de départ reçoit le vide qui occupait le cimetière. Chaque
+coup devient une matrice \emph{monomiale} $\tilde T$, qui a un seul coefficient non nul par ligne
+et par colonne. Une telle matrice est inversible. Sur toute une partie, le produit $\tilde G$
+reste monomial, et une seule multiplication par $\tilde G^{-1}$ ramène l'état final à la position
+de départ.
 
-\subsection{Revenir en arrière : trois réponses}
-Un coup sans prise s'inverse sans difficulté, car $R\,T\,b = b$. Avec une prise, $T$ n'est pas
-inversible. Le projet a exploré trois façons de traiter ce cas.
-
-\paragraph{1. L'inverse affine, avec une pile des prises.} On conserve à part la liste des pièces
-prises. Le retour s'écrit $b = R\,b' + \text{correction}$, où la correction remet la pièce prise
-sur sa case. Les fonctions \code{reverse\_matrix} et \code{invert\_game} procèdent ainsi.
-
-\paragraph{2. L'espace étendu avec un cimetière.} On ajoute au vecteur 30 cases, une par pièce
-capturable, ce qui donne $x\in\mathbb{Z}^{94}$. Une prise devient alors un cycle de trois cases. La
-pièce qui prend va en $t$, la pièce prise va au cimetière, et la case de départ reçoit le vide qui
-occupait le cimetière. Chaque coup devient une matrice \emph{monomiale}, qui a un seul coefficient
-non nul par ligne et par colonne. Une telle matrice est inversible.
-\[ \input{gen/cimetiere}\unskip \]
-\begin{figure}[H]
-\centering\includegraphics[width=.55\textwidth]{figs/cimetiere.pdf}
-\caption{La prise e4xd5 dans l'espace à 94 dimensions. Les lignes orange séparent le plateau (64
-cases) du cimetière (30 cases). La pièce prise n'est plus effacée, elle est rangée en c0.}
-\end{figure}
-Sur toute une partie, $\tilde G = \tilde T_n\cdots\tilde T_1$ reste monomiale, et une seule
-multiplication par $\tilde G^{-1}$ ramène l'état final à la position de départ. Le script
-\code{invert\_full\_game.py} le vérifie sur une partie complète.
-
-\paragraph{3. Sans cimetière, une relation.} Si l'on ne conserve rien, l'inverse d'un coup n'est
-plus une fonction mais une \emph{relation} :
+\textbf{La relation arrière.} Si nous ne conservons rien, l'inverse d'un coup n'est plus une
+fonction mais une \emph{relation} :
 \[ b_{\text{prev}} = R\,b + c\,e_t,\qquad c\in\{0\}\cup\{\text{pièces adverses restaurables}\}. \]
 Le paramètre libre $c$ représente l'information détruite par la prise. En marche arrière, chaque
 valeur possible de $c$ ouvre une branche.
@@ -374,73 +347,47 @@ valeur possible de $c$ ouvre une branche.
 \centering\includegraphics[width=\textwidth]{figs/retro.pdf}
 \caption{Les blancs viennent de jouer un cavalier en e5. S'il venait de d3, il a pu ne rien
 prendre, ou prendre une pièce noire de l'une des cinq sortes. Chaque valeur de $c$ donne un
-prédécesseur différent, et tous sont légaux.}
+prédécesseur différent.}
 \end{figure}
-\noindent Pour cette position, \input{gen/retro}\unskip
 
-\subsection{Imposer une fin : le mat étouffé}
-La relation arrière permet de retourner la question. Au lieu de chercher le meilleur coup, on fixe
-une condition finale et on cherche une suite de coups qui y conduit. Le module \code{impose.py}
-procède en deux temps.
-\begin{enumerate}
+\subsection{Imposer une fin}\label{th:impose}
+La relation arrière permet de retourner la question habituelle. Au lieu de chercher le meilleur
+coup, nous fixons une condition finale, par exemple un mat étouffé, et nous cherchons une suite de
+coups qui y conduit. La condition est un \emph{prédicat}, c'est-à-dire une fonction de la
+position qui répond vrai ou faux. La méthode procède en deux temps.
+\begin{itemize}
 \item \textbf{Synthèse des buts.} Le programme ne reçoit aucune position finale. Il en fabrique
 en modifiant légèrement le plateau autour du roi visé, sans ajouter de pièce, et garde celles qui
-satisfont le prédicat. Pour le mat étouffé, le prédicat exige un échec donné par un cavalier et un
-roi entouré de ses propres pièces.
-\item \textbf{Reliaison par rencontre au milieu.} Le programme développe les coups légaux depuis
-la position actuelle. Depuis chaque but, il remonte d'un demi-coup grâce à la relation
-$b_{\text{prev}} = R\,b + c\,e_t$. Une position atteinte des deux côtés fournit la suite de
-coups.
-\end{enumerate}
+satisfont le prédicat.
+\item \textbf{Rencontre au milieu.} Le programme développe les coups légaux depuis la position
+actuelle. Depuis chaque but, il remonte d'un demi-coup grâce à la relation arrière. Une position
+atteinte des deux côtés fournit la suite de coups.
+\end{itemize}
 
-\begin{exemple}{le mat de Philidor, redécouvert}
-On part de la position de gauche, avec pour seule consigne « mat étouffé » en 3 demi-coups au
-plus. Le moteur trouve \input{gen/etouffe}\unskip. La dame menace g7, la tour noire vient la
-défendre en g8, et le cavalier donne mat en f7.
-\end{exemple}
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/etouffe.pdf}
-\caption{La suite trouvée par \code{impose(position, is\_smothered\_mate)}. Personne n'a fourni la
-position finale. Le programme l'a construite, puis reliée à la position de départ.}
-\end{figure}
+\begin{note}
+\textbf{À retenir.} Tout coup s'écrit $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, avec un terme de
+plus pour la prise en passant et un second déplacement pour le roque. Une partie est un produit
+de telles matrices, qui tient dans deux plateaux d'étiquettes. Une prise détruit de l'information.
+Rangée dans un cimetière, elle rend toutes les matrices inversibles. Sinon, elle réapparaît en
+marche arrière sous forme de branches, ce qui permet d'imposer une condition finale.
+\end{note}
 
-\begin{retenir}
-Un coup s'écrit $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, avec un terme de plus pour la prise en
-passant et un second déplacement pour le roque. Une partie est un produit de telles matrices, qui
-tient dans deux plateaux d'étiquettes. Une prise détruit de l'information. Si on la range dans un
-cimetière, toutes les matrices deviennent inversibles. Sinon, elle réapparaît en marche arrière
-sous forme de branches, ce qui permet d'imposer une condition finale.
-\end{retenir}
+\section{Le calcul par lots}
 
-% =====================================================================================================
-\section{Des millions de positions à la fois : le GPU}
-
-Une carte graphique applique la même opération à des millions de données en parallèle. Les
-parties précédentes ont tout écrit en décalages et en opérations case par case. Il reste à empiler
-les positions.
-
-\subsection{Empiler les plateaux}
-On range $N$ plateaux dans un tableau de forme $(N, 65)$. La 65\textsuperscript{e} colonne,
+\subsection{Empiler les plateaux}\label{th:lots}
+Nous rangeons $N$ plateaux dans un tableau de forme $(N, 65)$. La 65\textsuperscript{e} colonne,
 \code{NONE}, est une sentinelle qui vaut toujours zéro. Elle joue le rôle d'une case inexistante.
 Un coup sans prise en passant vide la case \code{NONE}, ce qui ne change rien, et aucun coup ne
 demande donc de traitement particulier. Un coup est une ligne de six entiers $(f, t, k, c, f',
-t')$ :
-\[ \input{gen/lots}\unskip \]
-Appliquer $T$ à chaque plateau revient alors à une lecture groupée (\emph{gather}) suivie d'une
-écriture groupée (\emph{scatter}). Le GPU calcule \code{out[t] = k·b[f]}, puis \code{out[f] = 0} et
-\code{out[c] = 0}, et fait de même pour la tour du roque. La matrice $64\times64$ n'est jamais
-construite.
+t')$. Appliquer $T$ à chaque plateau revient alors à une lecture groupée (\emph{gather}) suivie
+d'une écriture groupée (\emph{scatter}) :
+\[ b'_t = k\,b_f,\qquad b'_f = 0,\qquad b'_c = 0,\qquad b'_{t'} = b_{f'},\qquad b'_{f'} = 0. \]
+La matrice $64\times64$ n'est jamais construite.
 
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/lots.pdf}
-\caption{Un parent et quatre fils, vus comme des lignes d'un tableau (cases a4 à h1, puis la
-sentinelle). Deux cellules seulement changent dans chaque fils (encadrés orange).}
-\end{figure}
-
-\subsection{Les 70 plans de coups}
-Pour générer tous les coups d'un lot, on construit un masque de forme $(N, 70, 64)$. Chaque plan
-$p$ correspond à un décalage fixe $\delta_p$. Dans ce plan, la case $f$ vaut vrai si la pièce posée
-en $f$ peut jouer ce décalage. Les 70 plans couvrent tous les coups possibles :
+\subsection{Les 70 plans de coups}\label{th:plans}
+Pour produire tous les coups d'un lot, nous construisons un masque de forme $(N, 70, 64)$. Chaque
+plan $p$ correspond à un décalage fixe $\delta_p$. Dans ce plan, la case $f$ vaut vrai si la pièce
+posée en $f$ peut jouer ce décalage. Les 70 plans couvrent tous les coups possibles :
 \begin{itemize}
 \item 56 plans de rayons, soit 8 directions et 7 distances, pour la dame, la tour, le fou et le roi
 (distance 1) ;
@@ -448,6 +395,8 @@ en $f$ peut jouer ce décalage. Les 70 plans couvrent tous les coups possibles :
 \item 4 plans de pions, pour l'avance simple, l'avance double et les deux prises ;
 \item 2 plans de roque.
 \end{itemize}
+Le décodage tient en une opération. La liste des indices non nuls du masque donne des couples
+(plan, case de départ), et la case d'arrivée vaut $t = f + \delta_p$.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/plans.pdf}
@@ -456,99 +405,54 @@ départ et la flèche montre un coup du plan. En bas, le nombre de cases de dép
 chacun des 70 plans.}
 \end{figure}
 
-Le décodage tient en une opération. La liste des indices non nuls du masque donne des couples
-(plan, case de départ), et la case d'arrivée vaut $t = f + \delta_p$.
-\begin{center}\small\input{gen/plans_decode}\unskip\end{center}
-Dans cette position, le masque contient \input{gen/plans_total}\unskip. Sur des centaines de
-positions tirées au hasard, les coups obtenus sont identiques à ceux de \code{python-chess}.
-
-\subsection{Le test d'échec vu depuis le roi}
+\subsection{Le test d'échec vu depuis le roi}\label{th:vueroi}
 Un coup pseudo-légal est légal si notre roi n'est pas en échec après le coup. Calculer les masques
-d'attaque de tout le camp adverse coûterait cher. On regarde plutôt depuis le roi. On lit les cases
-de ses rayons, de ses sauts de cavalier et de son voisinage, ainsi que les deux cases d'où un pion
-pourrait l'attaquer. Si la première pièce rencontrée sur un rayon orthogonal est une dame ou une
-tour adverse, ou sur une diagonale une dame ou un fou adverse, le roi est en échec.
+d'attaque de tout le camp adverse coûterait cher. Nous regardons plutôt depuis le roi. Nous lisons
+les cases de ses rayons, de ses sauts de cavalier et de son voisinage, ainsi que les deux cases
+d'où un pion pourrait l'attaquer. Si la première pièce rencontrée sur un rayon orthogonal est une
+dame ou une tour adverse, ou sur une diagonale une dame ou un fou adverse, le roi est en échec.
 \begin{figure}[H]
-\centering\includegraphics[width=.42\textwidth]{figs/vue_roi.pdf}
+\centering\includegraphics[width=.4\textwidth]{figs/vue_roi.pdf}
 \caption{Les cases lues pour un roi en e4. Les tables d'indices sont calculées une fois pour
 toutes, et les indices hors du plateau pointent sur la sentinelle.}
 \end{figure}
-\noindent \input{gen/vue_roi}\unskip{} Le GPU les effectue en une seule lecture groupée pour tout
-le lot.
 
-\subsection{Bitboards et noyau fusionné}
-Le dernier gain vient d'un noyau CUDA écrit à la main. Ce noyau représente chaque masque par un
-entier de 64 bits, où le bit $i$ correspond à la case $i$. Un décalage de masque devient un
-décalage de bits :
-\[ \input{gen/bitboard}\unskip \]
-Chaque fil d'exécution traite un parent. Il compte d'abord ses fils. Une somme préfixe attribue
-ensuite à chaque parent sa place dans le tableau de sortie, puis chaque fil écrit ses enfants. Le
-noyau produit les mêmes enfants, dans le même ordre, que la version \code{torch}, environ dix fois
-plus vite.
+\subsection{Les bitboards}\label{th:bitboard}
+Un masque de 64 cases tient dans un entier de 64 bits, où le bit $i$ correspond à la case $i$. Un
+décalage de masque devient un décalage de bits, et une opération logique case par case devient une
+opération logique sur un seul entier. Notre noyau CUDA utilise cette représentation. Chaque fil
+d'exécution y traite un parent. Il compte d'abord ses fils. Une somme préfixe attribue ensuite à
+chaque parent sa place dans le tableau de sortie, puis chaque fil écrit ses enfants.
 
-\subsection{Le débit obtenu}
-Le \emph{perft} compte toutes les positions atteignables à une profondeur donnée. C'est le test de
-référence d'un générateur de coups, car les valeurs exactes sont connues et la moindre erreur les
-modifie.
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/perft.pdf}
-\caption{À gauche, la croissance du nombre de positions, de 20 à 119 millions en 6 demi-coups. Le
-script recalcule les profondeurs 1 à 5 sur CPU. À droite, le débit d'une RTX PRO 6000 comparé à la
-commande \code{go perft} de Stockfish.}
-\end{figure}
-Kiwipete est une position de test où chaque camp dispose de nombreux coups. Sur cette position, le
-GPU compte les positions \input{gen/perft}\unskip~fois plus vite que Stockfish sur un cœur.
+\begin{note}
+\textbf{À retenir.} Les plateaux s'empilent dans un tableau $(N, 65)$. Un coup est une ligne de
+six entiers, appliquée par une lecture et une écriture groupées. Les 70 plans produisent en une
+passe tous les coups d'un lot, et le test d'échec lit un nombre fixe de cases autour du roi.
+\end{note}
 
-\begin{retenir}
-Les plateaux s'empilent dans un tableau $(N, 65)$. Un coup est une ligne de six entiers, appliquée
-par une lecture et une écriture groupées. Les 70 plans produisent en une passe tous les coups d'un
-lot. Le GPU atteint $5\times10^{10}$ positions par seconde en perft.
-\end{retenir}
+\section{La recherche du meilleur coup}
 
-% =====================================================================================================
-\section{Chercher le meilleur coup}
-
-Générer vite ne suffit pas. Pour choisir un coup, il faut comparer des suites de coups. Cette partie
-part d'un arbre jouet à 9 feuilles et construit pas à pas l'alpha-bêta par lots du moteur.
-
-\subsection{Minimax et negamax}
-Les blancs choisissent le coup qui maximise l'évaluation, les noirs celui qui la minimise. Dans
-l'arbre jouet, la racine a trois fils, et chaque fils a trois feuilles évaluées. Un fils vaut le
-minimum de ses feuilles, et la racine vaut le maximum de ses fils.
-
-Le moteur utilise la forme \emph{negamax}, qui traite les deux camps de la même façon. Chaque nœud
-évalue la position du point de vue du camp au trait, et
+\subsection{Negamax et l'écriture (max, +)}\label{th:maxplus}
+Les blancs choisissent le coup qui maximise l'évaluation, les noirs celui qui la minimise. Prenons
+un arbre jouet. La racine a trois fils, et chaque fils a trois feuilles évaluées. Un fils vaut le
+minimum de ses feuilles, et la racine vaut le maximum de ses fils. Le moteur utilise la forme
+\emph{negamax}, qui traite les deux camps de la même façon. Chaque nœud évalue la position du
+point de vue du camp au trait, et
 \[ v(p) = \max_{c\,\in\,\text{fils}(p)} \bigl(-v(c)\bigr). \]
 
-\subsection{L'écriture (max, +)}
-Remplaçons l'addition par le maximum, et la multiplication par l'addition. On obtient le
-semi-anneau $(\max, +)$, dans lequel le produit d'une matrice par un vecteur s'écrit
-$(A\otimes x)_i = \max_j (A_{ij} + x_j)$. Posons $A_{ij}=0$ si $j$ est un fils de $i$, et
-$A_{ij}=-\infty$ sinon. Un niveau de negamax devient alors un produit matrice-vecteur :
-\[ \input{gen/maxplus_A} \]
-\[ \begin{gathered}\input{gen/maxplus}\unskip\end{gathered} \]
-La recherche pleine largeur sur GPU procède ainsi, niveau par niveau. Elle forme un lot de parents,
-puis un lot de fils, et prend un maximum par groupe de frères. Le calcul est simple et entièrement
-parallèle. Sa limite est la taille de l'arbre.
+Remplacez maintenant l'addition par le maximum, et la multiplication par l'addition. Vous obtenez
+le semi-anneau $(\max, +)$, dans lequel le produit d'une matrice par un vecteur s'écrit
+\[ (A\otimes x)_i = \max_j (A_{ij} + x_j). \]
+Posons $A_{ij}=0$ si $j$ est un fils de $i$, et $A_{ij}=-\infty$ sinon. Un niveau de negamax
+devient un produit matrice-vecteur, $v_{\text{parents}} = A \otimes (-v_{\text{fils}})$. La
+recherche en pleine largeur procède ainsi, niveau par niveau. Sa limite est la taille de l'arbre.
+Une position offre environ 35 coups, donc de l'ordre de $35^d$ feuilles à $d$ demi-coups.
 
-\subsection{Pourquoi la pleine largeur ne suffit pas}
-Une position d'échecs offre environ 35 coups. À $d$ demi-coups, l'arbre compte de l'ordre de
-$35^d$ feuilles. Même à $2,5\times10^8$ nœuds par seconde, la pleine largeur plafonne à 4 à 6
-demi-coups en quelques secondes, alors que Stockfish dépasse 20.
-
-\begin{figure}[H]
-\centering\includegraphics[width=\textwidth]{figs/exp_noeuds.pdf}
-\caption{Kiwipete, mesures de l'incrément 1. À gauche, la pleine largeur visite un milliard de
-nœuds en profondeur 4, l'alpha-bêta quelques centaines de milliers. À droite, le temps de calcul.
-Sur GPU, visiter moins de nœuds n'accélère pas toujours la recherche, car des lots trop petits
-laissent la carte sous-employée.}
-\end{figure}
-
-\subsection{L'alpha-bêta : ne pas lire ce qui ne change rien}
-Parcourons l'arbre jouet de gauche à droite. Le premier fils vaut 3, donc les blancs sont sûrs
+\subsection{L'alpha-bêta : ne pas lire ce qui ne change rien}\label{th:alphabeta}
+Parcourez l'arbre jouet de gauche à droite. Le premier fils vaut 3, donc les blancs sont sûrs
 d'obtenir au moins 3. Dans le deuxième fils, la première feuille vaut 2. Comme les noirs y
 choisiront le minimum, ce fils vaudra au plus 2. Il ne peut pas dépasser 3, et ses deux autres
-feuilles ne servent à rien. C'est ce qu'on appelle une \emph{coupure}.
+feuilles ne servent à rien. C'est une \emph{coupure}.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/arbre.pdf}
@@ -563,219 +467,513 @@ camp au trait s'est déjà assuré ailleurs, $\beta$ ce que l'adversaire s'est d
 fils atteint une valeur $\ge \beta$, les fils suivants ne servent plus. L'ordre des fils décide
 donc du nombre de coupures. Dans le meilleur cas, avec $b$ coups par position et une profondeur
 $d$, l'alpha-bêta lit $b^{\lceil d/2\rceil} + b^{\lfloor d/2\rfloor} - 1$ feuilles au lieu de
-$b^d$. À temps égal, la profondeur atteignable double presque.
+$b^d$ \cite{knuth}. À temps égal, la profondeur atteignable double presque.
 
-\subsection{L'alpha-bêta comme convergence d'intervalles}
+\subsection{L'alpha-bêta comme convergence d'intervalles}\label{th:intervalles}
 Cette formulation relie l'alpha-bêta au calcul matriciel. Au lieu de calculer la valeur exacte de
-chaque nœud, on tient à jour un intervalle $[L, U]$ qui la contient. Au départ, on sait seulement
-que l'évaluation est bornée, ici par $[0, 15]$ dans l'arbre jouet. Chaque feuille lue resserre les
-intervalles de ses ancêtres. Le calcul reprend les produits $(\max,+)$, appliqués d'un côté aux
-bornes basses et de l'autre aux bornes hautes.
+chaque nœud, nous tenons à jour un intervalle $[L, U]$ qui la contient. Au départ, nous savons
+seulement que l'évaluation est bornée. Chaque feuille lue resserre les intervalles de ses
+ancêtres, par les mêmes produits $(\max,+)$ appliqués d'un côté aux bornes basses et de l'autre
+aux bornes hautes.
 \begin{itemize}
 \item \textbf{La convergence est monotone et finie.} Les intervalles ne peuvent que rétrécir, et
 l'arbre est fini. Il ne s'agit pas d'une contraction au sens de Banach, qui garantirait une
 vitesse géométrique. C'est une itération de Kleene, qui atteint son point fixe en un nombre fini
 de pas.
-\item \textbf{Le critère de décision se lit à la racine.} On peut jouer le coup $a$ dès que
+\item \textbf{Le critère de décision se lit à la racine.} Vous pouvez jouer le coup $a$ dès que
 $L(a) \ge \max_{b \ne a} U(b)$, car aucun autre coup ne peut plus le dépasser. Les valeurs exactes
 des autres coups sont alors inutiles.
 \end{itemize}
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/intervalles.pdf}
-\caption{Les intervalles des trois fils de la racine, feuille après feuille, dans l'ordre de
-lecture de l'alpha-bêta. Le critère $L_1 \ge \max(U_2, U_3)$ devient vrai au moment où
-l'alpha-bêta s'arrête.}
+\caption{Les intervalles des trois fils de la racine de l'arbre jouet, bornés au départ par
+$[0, 15]$, feuille après feuille, dans l'ordre de lecture de l'alpha-bêta.}
 \end{figure}
 
-Le critère est atteint après \input{gen/decision}\unskip, c'est-à-dire après autant de feuilles
-que l'alpha-bêta en lit. L'alpha-bêta est donc la règle d'arrêt de cette convergence
-d'intervalles. Cette lecture permet de le paralléliser. On peut lire les feuilles par paquets,
-tant que le critère n'est pas atteint.
+L'alpha-bêta est la règle d'arrêt de cette convergence. Cette lecture permet de le paralléliser,
+puisque l'on peut lire les feuilles par paquets tant que le critère n'est pas atteint.
 
-\subsection{L'alpha-bêta par lots : les vagues}
+\subsection{L'alpha-bêta par lots : le tri et les vagues}\label{th:vagues}
 Sur GPU, lire les fils un par un donnerait des lots trop petits, et la plupart des cœurs
-resteraient inactifs. On trie donc les fils du plus prometteur au moins prometteur, puis on les
-découpe en \emph{vagues}. Le GPU évalue la première vague pour tous les parents du lot en même
-temps. Les parents coupés quittent le lot. Les autres passent à la vague suivante, avec une
-fenêtre plus étroite.
+resteraient inactifs. Nous trions donc les fils du plus prometteur au moins prometteur, puis nous
+les découpons en \emph{vagues}. Le GPU évalue la première vague pour tous les parents du lot en
+même temps. Les parents coupés quittent le lot. Les autres passent à la vague suivante, avec une
+fenêtre plus étroite. Le tri MVV/LVA place les prises en tête, la plus grosse victime prise par
+le plus petit attaquant d'abord.
 
 \begin{figure}[H]
 \centering\includegraphics[width=.9\textwidth]{figs/vagues.pdf}
-\caption{Découpage en vagues selon le rang du fils. YBW (\emph{Young Brothers Wait}) cherche
-l'aîné seul, puis tous ses frères ensemble. Le mode hybride ajoute une vague intermédiaire. Le mode
-1-2-4 double la taille de la vague à chaque étape. Le mode adaptatif choisit le découpage lot par
-lot, selon la taille estimée du sous-arbre. Il prend tous les fils d'un coup sous $3\times10^4$
-nœuds, YBW sous $3\times10^7$, hybride sous $3\times10^9$, et 1-2-4 au-delà.}
+\caption{Découpage en vagues selon le rang du fils. YBW cherche l'aîné seul, puis tous ses frères
+ensemble \cite{ybw}. Le mode hybride ajoute une vague intermédiaire. Le mode 1-2-4 double la
+taille de la vague à chaque étape. Le mode adaptatif choisit le découpage lot par lot, selon la
+taille estimée du sous-arbre. Il prend tous les fils d'un coup sous $3\times10^4$ nœuds, YBW sous
+$3\times10^7$, hybride sous $3\times10^9$, et 1-2-4 au-delà.}
 \end{figure}
 
-Le tri des fils détermine l'efficacité de la première vague. Le tri MVV/LVA (\emph{Most Valuable
-Victim, Least Valuable Attacker}) place les prises en tête, de la plus grosse victime prise par le
-plus petit attaquant à l'inverse. Il coûte une lecture de table par fils. Pour chaque variante, un
-test vérifie que le score est identique à celui de la pleine largeur. L'élagage ne change donc
-jamais le résultat.
-
-\subsection{Deux pièges rencontrés}
-\paragraph{Le choix du coup à la racine.} En \emph{fail-soft}, un coup réfuté renvoie une borne
-haute au lieu de sa vraie valeur. Cette borne pouvait égaler le score du meilleur coup, et
-\code{argmax} choisissait alors parfois le coup réfuté. Le moteur a perdu ses 4 parties avant que
-le bogue soit trouvé. La correction place la borne strictement sous le meilleur score. Un test
-vérifie désormais que le coup joué, et pas seulement le score, vaut le minimax exact.
-
-\paragraph{La pendule.} On ne peut pas prévoir le temps que prendra une profondeur de plus. Le
-moteur cherche donc les coups de la racine par groupes de 1, 1, 2, 4 puis 8. Si le temps manque,
-il joue le meilleur coup parmi les groupes terminés. Ce résultat est partiel, mais sûr. Un plafond
-arrête tout à 1,5 fois le budget. Enfin, un coup de la racine qui répète une position déjà vue vaut
-0, pour que le moteur ne laisse pas filer par répétition une partie qu'il mène.
-
-\begin{retenir}
-Negamax est un produit matrice-vecteur dans le semi-anneau $(\max, +)$. L'alpha-bêta est la règle
-d'arrêt d'une convergence d'intervalles $[L, U]$, monotone et finie. Sur GPU, le moteur lit les
-fils par vagues, triés par MVV/LVA, et retire les parents coupés après chaque vague. L'élagage
-reste exact.
-\end{retenir}
+\begin{note}
+\textbf{À retenir.} Negamax est un produit matrice-vecteur dans $(\max, +)$. L'alpha-bêta est la
+règle d'arrêt d'une convergence d'intervalles $[L, U]$, monotone et finie. Sur GPU, le moteur lit
+les fils par vagues, triés par MVV/LVA, et retire les parents coupés après chaque vague. En
+théorie, cet élagage ne change jamais le résultat.
+\end{note}
 
 % =====================================================================================================
-\section{Ce que les expériences ont appris : cinq fils conducteurs}
+\clearpage
+\part{Calculs préparatoires : la théorie vérifiée par le moteur}
 
-Les expériences ont tourné sur des RTX PRO 6000 louées à l'heure, contre un Stockfish 16 installé
-sur la même machine. Cette partie en retient cinq conclusions.
+Cette partie ne contient aucune mesure de performance. Chaque calcul applique une formule de la
+partie~I à une position précise et donne le nombre obtenu par le moteur. Ces calculs tournent sur
+processeur et donnent le même résultat à chaque exécution. Ils servent à s'assurer que l'écriture
+matricielle est juste avant de mesurer quoi que ce soit.
 
-\subsection{Fil 1 : le débit ne fait pas la force}
-Le GPU compte les positions 157 fois plus vite que Stockfish sur un cœur. Les premières versions,
-qui cherchaient en pleine largeur, ont pourtant perdu nettement.
+\section{Exemples chiffrés}
+
+\calcul{La position de départ en vecteur}{th:position}
+\begin{python}
+from src.matrix_chess.engine import Game
+g = Game()                 # position de depart
+b = g.board.reshape(64)    # b[60] == 6 : le roi blanc en e1
+\end{python}
+Le moteur donne
+\[ \input{gen/vecteur}\unskip \]
+La première ligne de $B$, $(-4,-2,-3,-5,-6,-3,-2,-4)$, est bien la rangée~8 des noirs.
+
+\calcul{Le décalage comme produit de matrices}{th:decalage}
+Le script compare $\shift(P, d_r, d_c)$ et $S_{d_r} P\, S_{d_c}^{\top}$ pour les 16 décalages
+utiles, soit les 8 directions du roi et les 8 sauts du cavalier. Les deux résultats sont égaux
+dans les 16 cas. Pour un pas vers le nord,
+\[ \input{gen/shiftS} \]
+La distance du roi obtenue par dilatations successives depuis e4 est égale, case par case, à
+$\max(|\Delta i|,|\Delta j|)$.
+
+\begin{python}
+import numpy as np
+from src.matrix_chess.engine import step_attacks, KING_DIRS
+P = np.zeros((8, 8), bool); P[4, 4] = True   # roi en e4
+masque = step_attacks(P, KING_DIRS)          # 8 cases a True
+\end{python}
+
+\calcul{L'échec et le mat sur le coup du berger}{th:echec}
+Après 1.e4 e5 2.Fc4 Cc6 3.Dh5 Cf6 4.Dxf7, le moteur calcule
+\[ \input{gen/echec}\unskip \]
+Le roi est attaqué, il n'a aucune case de fuite, et aucun coup légal ne pare l'échec.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/echec.pdf}
+\caption{Le test d'échec en trois matrices : les cases attaquées, la case du roi, puis leur
+produit, qui contient un seul 1, en e8.}
+\end{figure}
+
+\calcul{Cinq coups et leurs matrices}{th:speciaux}
+Pour chaque coup, nous comparons $T\,b$ à la position que le moteur obtient en jouant le coup. Les
+deux sont égales dans les cinq cas. Nous donnons la matrice restreinte aux cases $S$ qui
+changent.
+
+\begin{python}
+from src.matrix_chess.engine import Game, move_matrix
+g = Game()
+T = move_matrix(52, 36)            # e2 = 52, e4 = 36
+b1 = T @ g.board.reshape(64)       # b1[36] == 1, b1[52] == 0
+\end{python}
+
+\medskip\noindent\textbf{Le coup simple e2-e4.}
+\input{gen/coup_pion}\unskip
+
+\medskip\noindent\textbf{La prise 2.exd5.}
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_prise.pdf}
+\caption{1.e4 d5 2.exd5. La matrice a la même forme que pour e2-e4. La ligne $t$ de $T$ efface le
+pion noir de d5.}
+\end{figure}
+\input{gen/coup_prise}\unskip
+
+\medskip\noindent\textbf{La promotion a7xb8=D.}
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_promotion.pdf}
+\caption{Une promotion avec prise. Le coefficient bleu vaut 5.}
+\end{figure}
+\input{gen/coup_promotion}\unskip
+
+\medskip\noindent\textbf{La prise en passant 3.exd6.}
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_enpassant.pdf}
+\caption{1.e4 a6 2.e5 d5 3.exd6 e.p. Trois cases changent. La case e5 se vide, d6 reçoit le pion
+blanc et d5 perd le pion noir.}
+\end{figure}
+\input{gen/coup_enpassant}\unskip
+
+\medskip\noindent\textbf{Le petit roque.}
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_roque.pdf}
+\caption{Roi e1-g1 et tour h1-f1. La matrice a deux coefficients hors de la diagonale.}
+\end{figure}
+\input{gen/coup_roque}\unskip
+
+\calcul{Une partie de huit demi-coups}{th:partie}
+Nous prenons la partie espagnole, variante d'échange, 1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fxc6 dxc6. Le
+script multiplie les huit matrices, compose en parallèle les étiquettes $(\mathrm{src},
+\mathrm{coef})$, et vérifie que les deux écritures donnent la même matrice $G$ et la même
+position finale.
+
+\begin{python}
+from src.matrix_chess import reduced
+src, coef = reduced.identity()                 # G = I
+for coup in coups:                             # coups issus de g.legal_moves()
+    src, coef = reduced.compose(src, coef, reduced.pack([coup]))
+\end{python}
+
+\input{gen/composition}\unskip
+
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/composition.pdf}
+\caption{À gauche, l'étiquette de chaque case. En e4, « ←e2 » signifie que le contenu de e4 vient
+de la case initiale e2. « 0 » marque une case vidée. En c6, l'étiquette « ←d7 » indique que le pion
+a pris le fou, lui-même venu de f1. La colonne f1 de $G$ est donc nulle.}
+\end{figure}
+
+\calcul{Le cimetière et les prédécesseurs}{th:retour}
+\textbf{Le cimetière.} Pour la prise e4xd5, restreinte aux trois cases e4, d5 et à la première
+case du cimetière, le moteur donne
+\[ \input{gen/cimetiere}\unskip \]
+La matrice est une permutation, et son inverse est sa transposée.
+\begin{figure}[H]
+\centering\includegraphics[width=.5\textwidth]{figs/cimetiere.pdf}
+\caption{La prise e4xd5 dans l'espace à 94 dimensions. Les lignes orange séparent le plateau (64
+cases) du cimetière (30 cases). La pièce prise n'est plus effacée, elle est rangée en c0.}
+\end{figure}
+
+\textbf{Les prédécesseurs.} Pour la position de la section~\ref{th:retour}, où un cavalier blanc
+vient d'arriver en e5, \input{gen/retro}\unskip{} Le script rejoue le coup depuis chacun de ces
+six prédécesseurs et retrouve la position d'arrivée.
+
+\calcul{Le mat de Philidor retrouvé}{th:impose}
+\begin{python}
+from src.matrix_chess.impose import impose
+from src.matrix_chess.retro import is_smothered_mate
+chemin, final = impose(position, is_smothered_mate, max_plies=3)
+\end{python}
+Nous donnons au moteur la position de gauche et la seule consigne « mat étouffé », en 3
+demi-coups au plus. Il trouve \input{gen/etouffe}\unskip. La dame menace g7, la tour noire vient
+la défendre en g8, et le cavalier donne mat en f7.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/etouffe.pdf}
+\caption{La suite trouvée. Personne n'a fourni la position finale. Le programme l'a construite,
+puis reliée à la position de départ.}
+\end{figure}
+
+\calcul{Un lot de quatre fils}{th:lots}
+Depuis la position de départ, nous appliquons quatre coups d'un seul appel. Les coups s'écrivent
+\[ \input{gen/lots}\unskip \]
+où 64 désigne la sentinelle. Les quatre fils sont identiques aux positions obtenues en jouant
+chaque coup séparément.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/lots.pdf}
+\caption{Le parent et ses quatre fils, vus comme des lignes d'un tableau (cases a4 à h1, puis la
+sentinelle). Deux cellules seulement changent dans chaque fils (encadrés orange).}
+\end{figure}
+
+\calcul{Le décodage des plans et les lectures du roi}{th:plans}
+Dans la position de la section~\ref{th:plans}, le masque contient
+\input{gen/plans_total}\unskip. Voici cinq couples (plan, case de départ) et le coup décodé.
+\begin{center}\small\input{gen/plans_decode}\unskip\end{center}
+\input{gen/vue_roi}\unskip{} Enfin, les pions blancs de la position de départ s'écrivent comme un
+entier de 64 bits, et leur avance d'une case comme un décalage de 8 bits :
+\[ \input{gen/bitboard}\unskip \]
+
+\calcul{L'arbre jouet en (max, +)}{th:maxplus}
+Les feuilles de l'arbre jouet valent 3, 12, 8, puis 2, 4, 6, puis 14, 5, 2. Avec
+\[ \input{gen/maxplus_A} \]
+le calcul donne
+\[ \begin{gathered}\input{gen/maxplus}\unskip\end{gathered} \]
+La racine vaut 3, comme par le minimax direct.
+
+\calcul{Le critère de décision et l'alpha-bêta}{th:intervalles}
+Sur l'arbre jouet, le critère $L_1 \ge \max(U_2, U_3)$ est atteint après
+\input{gen/decision}\unskip. L'alpha-bêta lit le même nombre de feuilles dans les deux cas. Le
+critère d'intervalles et l'alpha-bêta s'arrêtent donc au même moment.
+
+\section{Tests de conformité}
+
+Les exemples précédents portent sur une position chacun. Les tests de conformité comparent le
+moteur à une référence indépendante sur un grand nombre de positions. Nous les avons relancés sur
+processeur pour ce rapport.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{7.6cm}>{\raggedright\arraybackslash}p{2.6cm}}
+\toprule
+Ce qui est vérifié & Référence & Résultat\\
+\midrule
+Coups légaux, mat, pat et nulles du moteur \code{numpy} & \code{python-chess}, sur 50 parties
+aléatoires, soit 9\,263 positions (\code{validate.py}) & identiques\\
+Règles, masques et matrices $T$ & 39 tests unitaires (\code{test\_engine}) & 39 réussis\\
+Forme réduite et étiquettes $(\mathrm{src}, \mathrm{coef})$ & matrices denses $64\times64$
+(\code{test\_reduced}, \code{test\_reduced\_gpu}) & 8 réussis\\
+Relation arrière, prédicats de mat, \code{impose} & parties rejouées vers l'avant
+(\code{test\_retro}) & 9 réussis\\
+Générateur par lots et recherche & perft publiés sur 5 positions, \code{python-chess} sur 20
+parties aléatoires, negamax naïf, pleine largeur pour le score et pour le coup joué
+(\code{test\_gpu\_engine}) & 6 réussis, 1 réservé au GPU\\
+Pendule, résultat partiel, répétition & scénarios construits (\code{test\_search\_control}) & 7
+réussis\\
+Formules d'analyse et d'Elo & valeurs connues d'avance (\code{test\_analyse},
+\code{test\_duel}) & 7 réussis\\
+\bottomrule
+\end{tabular}
+\caption{Les tests de conformité, relancés sur processeur le 25 novembre 2026. Le test réservé au
+GPU compare le noyau CUDA à la version \code{torch}. Il a été exécuté sur GPU à l'incrément 2
+\cite{inc2}.}
+\end{table}
+
+\textbf{Les valeurs de référence du perft.} Le \emph{perft} compte toutes les positions
+atteignables à une profondeur donnée. Les valeurs exactes sont publiées \cite{perft}, et la
+moindre erreur dans les règles les modifie. Depuis la position de départ, notre générateur par
+lots trouve \input{gen/perft_ref}\unskip{} positions aux profondeurs 1 à 5, soit les valeurs
+publiées.
+\begin{figure}[H]
+\centering\includegraphics[width=.6\textwidth]{figs/perft_ref.pdf}
+\caption{Nombre de positions depuis la position de départ, recalculé par le script sur
+processeur.}
+\end{figure}
+
+\begin{note}
+\textbf{À retenir.} Sur chaque exemple, le calcul du moteur donne le résultat prévu par la
+théorie. Sur de grands ensembles de positions, le moteur produit les mêmes coups que
+\code{python-chess}, les mêmes nombres de positions que les valeurs publiées, et l'alpha-bêta par
+lots donne le même score et un coup de même valeur que la pleine largeur. L'écriture matricielle
+est donc juste. Reste à savoir ce qu'elle vaut en vitesse et en force de jeu.
+\end{note}
+
+% =====================================================================================================
+\clearpage
+\part{Résultats de l'étude}
+
+Cette partie contient les mesures. À la différence des calculs de la partie~II, elles dépendent
+du matériel, de l'adversaire et du hasard des parties.
+
+\section{Protocole}
+
+\textbf{Matériel.} Toutes les mesures viennent de RTX PRO 6000 louées à l'heure.
+
+\textbf{Adversaire.} Nous jouons contre Stockfish 16 installé sur la même machine, bridé par
+son option \code{UCI\_Elo} de 1320 Elo à sa force maximale.
+
+\textbf{Conditions de jeu.} Les premières séries se jouent en 3 minutes par camp. Les suivantes
+reprennent les conditions dans lesquelles Stockfish calibre son échelle Elo, soit 60~s + 0,6~s
+par coup, 1 thread et 16~Mo de table. Chaque série compte 2 parties par niveau, une avec chaque
+couleur.
+
+\textbf{Débit.} Nous mesurons le débit par le perft en profondeur 6, sur la position de départ
+et sur Kiwipete, contre la commande \code{go perft} de Stockfish.
+
+\textbf{Qualité des coups.} Stockfish évalue chaque coup de nos parties, à la manière de Lichess
+\cite{lichess}. La perte d'un coup est l'écart, en centipions, avec le meilleur coup selon
+Stockfish. Un filtre de qualité applique la même mesure à 100 positions tirées avec une graine
+fixe.
+
+\textbf{Comparaison de deux versions.} Un duel oppose deux réglages du moteur sur 100 ouvertures
+équilibrées, jouées chacune deux fois avec les couleurs inversées, en 10~s + 0,1~s. Nous en
+tirons un écart d'Elo et son intervalle de confiance à 95~\%.
+
+\begin{python}
+python -m src.matrix_chess.bench_gpu 6
+python -m src.matrix_chess.match --preset uci-elo --prune --waves hybride
+python -m src.matrix_chess.analyse filtre games.txt -n 100 --sortie filtre.csv
+python -m src.matrix_chess.duel --a "prune=1,waves=hybride,tri=statique" \
+    --b "prune=1,waves=adaptatif,tri=mvv" -n 100 --clock 10 --inc 0.1
+\end{python}
+
+\section{Mesures}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{8.6cm}}
+\toprule
+Mesure & Valeur\\
+\midrule
+Perft 6 sur Kiwipete & $5,1\times10^{10}$ positions/s sur GPU, 157 fois Stockfish sur un cœur\\
+Pleine largeur, conditions de calibration & 4 à 6 demi-coups, 5,5 points sur 14\\
+Alpha-bêta hybride, mêmes conditions & 7,5 points sur 14, dont 1,5 sur 2 contre Stockfish 2200\\
+Nœuds visités, Kiwipete en profondeur 4 & YBW visite 0,05~\% des nœuds de la pleine largeur\\
+Perte par coup selon la profondeur & 71 cp en profondeur 4, 20 cp en profondeur 8\\
+Filtre de qualité, 1~s par coup & de 35,9 à 29,6 cp entre les incréments 1 et 2\\
+Duel de 200 parties & \input{gen/duel}\unskip\\
+\bottomrule
+\end{tabular}
+\caption{Les mesures principales. Les valeurs viennent des rapports des incréments 1 et 2
+\cite{inc1,inc2}, sauf le duel, recalculé ici depuis ses données.}
+\end{table}
+
+\subsection{Le débit}
+Le GPU compte $5,1\times10^{10}$ positions par seconde sur Kiwipete, soit
+\input{gen/perft}\unskip~fois le débit de Stockfish sur un cœur.
+\begin{figure}[H]
+\centering\includegraphics[width=.8\textwidth]{figs/exp_debit.pdf}
+\caption{Débit d'une RTX PRO 6000 et de Stockfish sur un cœur, sur les deux positions de test.}
+\end{figure}
+
+\subsection{La force en partie}
+Les premières versions, en pleine largeur, perdent nettement. Le passage à l'alpha-bêta par lots
+porte le score de 5,5 à 7,5 points sur 14.
 \begin{figure}[H]
 \centering\includegraphics[width=.85\textwidth]{figs/exp_versions.pdf}
-\caption{Score contre Stockfish bridé, de 1320 Elo à sa force maximale, pour chaque version du
-moteur de l'incrément 1. Les versions v1 à v3 jouaient en 3+0. Les versions v4 jouaient dans les
-conditions de calibration de Stockfish, soit 60~s + 0,6~s, 1 thread et 16~Mo de table.}
+\caption{Score contre Stockfish bridé pour chaque version du moteur de l'incrément 1. Les versions
+v1 à v3 jouaient en 3+0, les versions v4 en conditions de calibration.}
 \end{figure}
-Contre un Stockfish qui disposait de toute la machine, notre moteur visitait 1,3 fois plus de
-nœuds par seconde. Stockfish atteignait pourtant 65 demi-coups, contre 7 pour nous. Son élagage
-concentre la recherche sur un petit nombre de lignes.
 
-\subsection{Fil 2 : la profondeur est le facteur limitant}
-Un émulateur séquentiel du moteur a mesuré, selon la profondeur de recherche, la perte moyenne du
-coup choisi par rapport au meilleur coup selon Stockfish. Cette perte passe de 71 centipions en
-profondeur 4 à 20 en profondeur 8.
+\subsection{L'effet de l'élagage}
+En profondeur 4 sur Kiwipete, la pleine largeur visite plus d'un milliard de nœuds, l'alpha-bêta
+quelques centaines de milliers. À temps égal, il gagne 2 à 3 demi-coups.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/exp_noeuds.pdf}
+\caption{Kiwipete, mesures de l'incrément 1. À gauche, les nœuds visités. À droite, le temps de
+calcul. Sur GPU, visiter moins de nœuds n'accélère pas toujours la recherche, car des lots trop
+petits laissent la carte sous-employée.}
+\end{figure}
+
+\subsection{La profondeur et la qualité des coups}
+La perte moyenne du coup choisi baisse quand la profondeur augmente. Dans nos parties, elle passe
+de 31 centipions sur les coups 1 à 10 à 56 sur les coups 11 à 20, avec 5~\% de gaffes. En médiane,
+le coup décisif tombe au coup 10, et c'est le nôtre dans 35 parties sur 36.
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/exp_qualite.pdf}
-\caption{À gauche, la perte par coup selon la profondeur (agent 3, incrément 1). À droite, la
-perte selon le moment de la partie, mesurée par l'analyse coup par coup des 62 parties de
-l'incrément 1 (incrément 2).}
+\caption{À gauche, la perte par coup selon la profondeur, mesurée sur un émulateur séquentiel du
+moteur (incrément 1). À droite, la perte selon le moment de la partie, sur les 62 parties de
+l'incrément 1.}
 \end{figure}
 
-\subsection{Fil 3 : élaguer et trier valent plus que calculer}
-Sur Kiwipete, l'alpha-bêta par lots ne visite que 0,05~\% des nœuds de la pleine largeur. À temps
-égal, il gagne 2 à 3 demi-coups. En conditions de calibration, le score est passé de 5,5/14 à
-7,5/14. À l'incrément 2, le tri MVV/LVA a ramené une recherche en profondeur 6 sur le gambit Dame
-de 21~s à 1,1~s. Un duel de 200 parties a ensuite opposé l'ancien et le nouveau moteur, en
-10~s + 0,1~s, avec des ouvertures appariées et des couleurs inversées. Le nouveau moteur marque
-\input{gen/duel}\unskip.
+\subsection{La comparaison des deux incréments}
+Le tri MVV/LVA ramène une recherche en profondeur 6 sur le gambit Dame de 21~s à 1,1~s. Dans le
+duel, le moteur de l'incrément 2 marque \input{gen/duel}\unskip{} contre celui de l'incrément 1.
 \begin{figure}[H]
 \centering\includegraphics[width=.8\textwidth]{figs/exp_duel.pdf}
 \caption{Écart d'Elo cumulé au fil du duel, avec son intervalle de confiance à 95~\%.}
 \end{figure}
 
-\subsection{Fil 4 : les parties se perdent à la sortie de l'ouverture}
-L'analyse coup par coup (figure précédente, à droite) montre que notre perte moyenne passe de
-31~centipions sur les coups 1 à 10 à 56 sur les coups 11 à 20, avec 5~\% de gaffes. En médiane, le
-coup décisif tombe au coup 10, et c'est le nôtre dans 35 parties sur 36. Après le coup 20, l'écart
-avec Stockfish bridé se réduit à quelques centipions. Le moteur perd donc ses parties à la sortie
-de l'ouverture, pas en finale.
+% =====================================================================================================
+\clearpage
+\part{Discussion}
 
-\subsection{Fil 5 : les matchs trouvent ce que les tests ratent}
-Le bogue de la racine passait tous les tests de score, et seuls les matchs l'ont révélé. Deux
-outils sont nés de ce constat, et le projet les lance désormais avant tout match :
+\section{Leçons : quand le débit ne suffit pas}
+
+\subsection*{Le débit ne fait pas la force}
+Contre un Stockfish qui disposait de toute la machine, notre moteur visitait 1,3 fois plus de
+nœuds par seconde. Stockfish atteignait pourtant 65 demi-coups, contre 7 pour nous, et gagnait
+les deux parties. Son élagage concentre la recherche sur un petit nombre de lignes. Compter plus
+vite ne compense pas un arbre qui grossit d'un facteur 35 à chaque demi-coup.
+
+\subsection*{Trier vaut plus que découper}
+Nous attendions le gain principal des vagues, qui règlent la taille des lots. Il est venu du tri.
+Un bon premier fils provoque la coupure dès la première vague, quelle que soit la découpe. Si vous
+ne deviez garder qu'une optimisation de l'alpha-bêta par lots, gardez le tri des coups.
+
+\subsection*{Vérifiez le coup joué, pas seulement le score}
+Notre alpha-bêta renvoyait le bon score et jouait parfois un mauvais coup. En \emph{fail-soft},
+un coup réfuté renvoie une borne haute au lieu de sa vraie valeur. Cette borne pouvait égaler le
+score du meilleur coup, et \code{argmax} choisissait alors le coup réfuté. Tous les tests de
+score passaient. Le moteur a perdu ses 4 parties avant que nous trouvions le bogue. La correction
+place la borne strictement sous le meilleur score, et un test de la partie~II compare désormais
+le coup joué au minimax exact. Depuis, nous lançons le filtre de qualité avant tout match.
+
+\subsection*{Gardez un résultat partiel plutôt que de prévoir le temps}
+Nous n'avons trouvé aucun moyen fiable de prévoir le temps que prendra une profondeur de plus. Le
+moteur cherche donc les coups de la racine par groupes de 1, 1, 2, 4 puis 8. Si le temps manque,
+il joue le meilleur coup parmi les groupes terminés. Un plafond arrête tout à 1,5 fois le budget.
+
+\section{Limites}
 \begin{itemize}
-\item un \textbf{filtre de qualité} déterministe, qui mesure la perte des coups choisis, selon
-Stockfish, sur 100 positions tirées avec une graine fixe ;
-\item un \textbf{duel apparié}, qui donne un écart d'Elo avec son intervalle de confiance.
+\item \textbf{De petits échantillons.} Les séries contre Stockfish comptent 14 parties. Un écart
+de 2 points sur 14 indique une tendance, pas une mesure d'Elo.
+\item \textbf{Un duel entre deux versions du même moteur.} L'écart de $+127$ Elo est mesuré
+contre notre ancien moteur. Il ne dit pas combien nous gagnons contre Stockfish.
+\item \textbf{Un émulateur pour la perte par profondeur.} La courbe de 71 à 20 centipions vient
+d'un émulateur séquentiel sur processeur, pas du moteur GPU lui-même.
+\item \textbf{Des données incomplètes.} Les coups des 200 parties du duel et de 8 parties de la
+version v3 n'ont pas été conservés. Seuls leurs résultats le sont.
 \end{itemize}
 
-% =====================================================================================================
-\section{Les hypothèses prometteuses}
+\section{Pistes : sept hypothèses à tester}
 
-Les cinq fils conduisent au même objectif, gagner de la profondeur utile, en particulier entre les
-coups 11 et 20. Les hypothèses ci-dessous sont classées par gain attendu sur la force de jeu. Les
-outils déjà en place suffisent à mesurer chacune d'elles.
+Les leçons conduisent au même objectif, gagner de la profondeur utile, en particulier entre les
+coups 11 et 20. Les hypothèses sont classées par gain attendu sur la force de jeu. Aucune n'a
+encore été mesurée. Les outils déjà en place suffisent à tester chacune d'elles.
 
-\begin{hypo}{Hypothèse 1 : une table de transposition sur GPU}
-Une même position peut être atteinte par plusieurs ordres de coups. Stockfish garde le résultat de
-chaque recherche dans une table de transposition et le réutilise. Notre moteur cherche la position
-autant de fois qu'elle apparaît. Les clés de position existent déjà (\code{position\_keys}). Une
-table de hachage sur GPU, consultée par lot avant chaque vague, fournirait aussi le meilleur coup
-connu pour trier la première vague.
-\textbf{Mesure} : nœuds par profondeur sur les positions de \code{recherche/}, puis duel de 200
-parties.
-\end{hypo}
+\begin{itemize}[itemsep=6pt]
+\item \textbf{1. Une table de transposition sur GPU.} Une même position peut être atteinte par
+plusieurs ordres de coups. Stockfish garde le résultat de chaque recherche dans une table et le
+réutilise. Notre moteur cherche la position autant de fois qu'elle apparaît. Les clés de position
+existent déjà (\code{position\_keys}). Une table consultée par lot avant chaque vague fournirait
+aussi le meilleur coup connu pour trier la première vague. \emph{Mesure} : nœuds par profondeur,
+puis duel de 200 parties.
 
-\begin{hypo}{Hypothèse 2 : une évaluation adaptée à la sortie d'ouverture}
-L'évaluation actuelle ne tient compte que du matériel et de tables de position fixes. Or les plans
-de coups contiennent déjà la mobilité de chaque camp, qui est le nombre de 1 du masque $(70, 64)$.
-La sécurité du roi s'écrit comme les masques d'attaque, restreints au voisinage du roi. Un petit
-livre d'ouvertures serait la solution la moins coûteuse.
-\textbf{Mesure} : perte sur les coups 11 à 20 par l'analyse coup par coup, puis duel.
-\end{hypo}
+\item \textbf{2. Une évaluation adaptée à la sortie d'ouverture.} L'évaluation actuelle ne tient
+compte que du matériel et de tables de position fixes. Or les plans de coups contiennent déjà la
+mobilité de chaque camp, qui est le nombre de 1 du masque $(70, 64)$. La sécurité du roi s'écrit
+comme les masques d'attaque, restreints au voisinage du roi. Un petit livre d'ouvertures serait la
+solution la moins coûteuse. \emph{Mesure} : perte sur les coups 11 à 20, puis duel.
 
-\begin{hypo}{Hypothèse 3 : l'élagage non exact, validé par duel}
-Les moteurs alpha-bêta utilisent couramment deux techniques. La première réduit la profondeur des
-coups tardifs (LMR). La seconde essaie d'abord de passer son tour (coup nul). Aucune des deux
-n'est exacte, et le test d'égalité avec la pleine largeur ne s'applique plus. Le filtre de qualité
-et le duel apparié ont été conçus pour ce cas.
-\textbf{Mesure} : filtre de qualité, puis duel de 200 parties.
-\end{hypo}
+\item \textbf{3. L'élagage non exact.} Les moteurs alpha-bêta réduisent couramment la profondeur
+des coups tardifs (LMR) et essaient d'abord de passer leur tour (coup nul). Aucune de ces deux
+techniques n'est exacte, et notre test d'égalité avec la pleine largeur ne s'applique plus.
+\emph{Mesure} : filtre de qualité, puis duel de 200 parties.
 
-\begin{hypo}{Hypothèse 4 : mesurer l'Elo du moteur de l'incrément 2}
-Le duel mesure un progrès relatif. Il manque une mesure absolue contre Stockfish dans ses
-conditions de calibration, comme à l'incrément 1.
-\textbf{Mesure} : \code{match.py -{}-preset uci-elo}, de 1320 à 2500 Elo, avec assez de parties
-pour obtenir un intervalle de confiance.
-\end{hypo}
+\item \textbf{4. L'Elo du moteur de l'incrément 2.} Le duel mesure un progrès relatif. Il manque
+une mesure contre Stockfish dans ses conditions de calibration. \emph{Mesure} :
+\code{match.py -{}-preset uci-elo}, de 1320 à 2500 Elo, avec assez de parties pour obtenir un
+intervalle de confiance.
 
-\begin{hypo}{Hypothèse 5 : l'analyse rétrograde sur GPU}
-La relation $b_{\text{prev}} = R\,b + c\,e_t$ se calcule avec les mêmes décalages que la marche
-avant, car les pièces se déplacent de façon symétrique. Le GPU pourrait donc générer par plans les
-prédécesseurs d'un lot de positions, comme il génère les coups. La rencontre au milieu deviendrait
-l'intersection de deux ensembles de clés sur GPU, ce qui permettrait d'imposer une condition finale
-au-delà de 3 demi-coups. On peut aussi poser le problème comme une minimisation. La valeur d'un
-nœud devient sa distance au but, et l'alpha-bêta par lots sait déjà calculer un tel minimax.
-\textbf{Mesure} : profondeur atteinte par \code{impose} sur les positions de \code{demo\_impose}.
-\end{hypo}
+\item \textbf{5. L'analyse rétrograde sur GPU.} La relation $b_{\text{prev}} = R\,b + c\,e_t$ se
+calcule avec les mêmes décalages que la marche avant. Le GPU pourrait donc générer par plans les
+prédécesseurs d'un lot de positions. La rencontre au milieu deviendrait l'intersection de deux
+ensembles de clés, ce qui permettrait d'imposer une condition finale au-delà de 3 demi-coups. Le
+problème se pose aussi comme une minimisation. La valeur d'un nœud devient sa distance au but, et
+l'alpha-bêta par lots sait déjà calculer un tel minimax. \emph{Mesure} : profondeur atteinte par
+\code{impose}.
 
-\begin{hypo}{Hypothèse 6 : une contrainte en langage naturel}
-Le prédicat « gagner par un mat étouffé » est déjà écrit en masques, avec un échec donné par un
-cavalier et un roi entouré de ses propres pièces. Un modèle de langage pourrait traduire une
-consigne en un prédicat de ce type, construit uniquement avec les fonctions existantes
-(\code{attacked\_by}, \code{checker\_kinds}, voisinage du roi). Le module \code{impose} trouverait
+\item \textbf{6. Une contrainte en langage naturel.} Le prédicat « gagner par un mat étouffé » est
+déjà écrit en masques. Un modèle de langage pourrait traduire une consigne en un prédicat de ce
+type, construit uniquement avec les fonctions existantes. Le module \code{impose} trouverait
 ensuite le chemin. Le moteur vérifie que la position finale satisfait le prédicat. Il resterait à
 vérifier, sur des exemples, que le prédicat traduit fidèlement la consigne.
-\end{hypo}
 
-\begin{hypo}{Hypothèse 7 : un critère de convergence pour gérer le temps}
-La partie 6 a établi un critère de décision à la racine, $L(a) \ge \max_{b\ne a} U(b)$. On peut en
-tirer une règle d'arrêt plus fine que la pendule, à partir de quatre signaux que le moteur mesure
-déjà :
-\begin{itemize}
-\item l'écart $U - L$ entre le meilleur coup et le deuxième ;
-\item le facteur de branchement effectif $N_d / N_{d-1}$ ;
-\item le taux de coupure de la première vague (\code{Searcher.stats()}) ;
-\item la stabilité du meilleur coup d'une profondeur à la suivante.
+\item \textbf{7. Un critère de convergence pour gérer le temps.} La
+section~\ref{th:intervalles} donne un critère de décision à la racine,
+$L(a) \ge \max_{b\ne a} U(b)$. Nous pouvons en tirer une règle d'arrêt plus fine que la pendule,
+à partir de quatre signaux que le moteur mesure déjà : l'écart $U - L$ entre le meilleur coup et
+le deuxième, le facteur de branchement effectif $N_d / N_{d-1}$, le taux de coupure de la
+première vague, et la stabilité du meilleur coup d'une profondeur à la suivante. \emph{Mesure} :
+temps économisé sans perte de qualité, d'après le filtre de qualité.
 \end{itemize}
-\textbf{Mesure} : temps économisé sans perte de qualité, d'après le filtre de qualité.
-\end{hypo}
 
-% =====================================================================================================
 \section{Conclusion}
 Les règles des échecs s'écrivent entièrement en décalages et en matrices, marche arrière comprise.
-Ce calcul tourne sur une carte graphique à $5\times10^{10}$ positions par seconde. Ce débit ne
-suffit pas à battre Stockfish, qui atteint 65 demi-coups là où notre moteur en atteint 7. Les deux
-incréments ont montré que la force vient de la sélection des coups. L'alpha-bêta exact par lots a
-fait passer le score contre Stockfish de 5,5/14 à 7,5/14. Le tri MVV/LVA, les vagues adaptatives
-et la pendule de l'incrément 2 ont ajouté $+127$ Elo. Les prochaines étapes sont la table de transposition
-et une meilleure évaluation à la sortie de l'ouverture. La formulation en intervalles décrit cette
-sélection en termes matriciels et fournit un critère d'arrêt explicite, qui relie la génération de
-coups sur GPU à la recherche.
+Les calculs préparatoires le confirment sur chaque exemple et sur de grands ensembles de
+positions. Ce calcul tourne sur une carte graphique à $5\times10^{10}$ positions par seconde. Ce
+débit ne suffit pas à battre Stockfish, qui atteint 65 demi-coups là où notre moteur en atteint 7.
+
+La force vient de la sélection des coups. L'alpha-bêta exact par lots a fait passer le score
+contre Stockfish de 5,5 à 7,5 points sur 14. Le tri MVV/LVA, les vagues adaptatives et la pendule
+ont ajouté $+127$ Elo. La formulation en intervalles décrit cette sélection en termes matriciels
+et fournit un critère d'arrêt explicite.
+
+Si vous reprenez ce travail, commencez par la table de transposition et par l'évaluation à la
+sortie de l'ouverture. Lancez le filtre de qualité avant chaque match, et jugez chaque changement
+par un duel apparié.
+
+\begin{thebibliography}{9}
+\bibitem{knuth} D. E. Knuth et R. W. Moore, « An analysis of alpha-beta pruning »,
+\emph{Artificial Intelligence}, vol. 6, n° 4, 1975.
+\bibitem{ybw} R. Feldmann, \emph{Game Tree Search on Massively Parallel Systems}, thèse,
+université de Paderborn, 1993.
+\bibitem{perft} Chess Programming Wiki, page « Perft Results », chessprogramming.org.
+\bibitem{lichess} Lichess, page « Accuracy », lichess.org/page/accuracy.
+\bibitem{inc1} Projet \code{chess-gpu}, \emph{Incrément 1 : moteur matriciel sur GPU},
+\code{docs/etudes/2026-11-24\_increment1-gpu/rapport\_gpu.pdf}.
+\bibitem{inc2} Projet \code{chess-gpu}, \emph{Incrément 2 : qualité, tri, vagues, pendule},
+\code{docs/etudes/2026-11-24\_increment2/rapport\_inc2.pdf}.
+\bibitem{theorie} Projet \code{chess-gpu}, \code{docs/king\_matrix.md} et
+\code{docs/matrix\_chess.md}.
+\end{thebibliography}
 
 % =====================================================================================================
 \appendix
@@ -801,38 +999,43 @@ $[L, U]$ & intervalle qui encadre la valeur d'un nœud\\
 \end{table}
 
 \section{Glossaire}
-\begin{description}
-\item[Centipion (cp)] Un centième de la valeur d'un pion, unité des évaluations.
-\item[Elo] Échelle de force. Un écart de 100 points donne au plus fort environ 64~\% des points.
-\item[Fail-soft] Variante de l'alpha-bêta qui renvoie, quand un nœud est coupé, la borne la plus
-serrée possible plutôt que $\alpha$ ou $\beta$.
-\item[Kiwipete] Position de test classique de la page « Perft Results » de chessprogramming.org,
-riche en roques, en prises en passant et en promotions.
-\item[MVV/LVA] \emph{Most Valuable Victim, Least Valuable Attacker}. On essaie d'abord la prise de
-la plus grosse pièce par la plus petite.
-\item[Perft] Nombre exact de positions atteignables en $d$ demi-coups. Il sert à valider un
+\textbf{Centipion (cp)} : un centième de la valeur d'un pion, unité des évaluations.
+
+\textbf{Elo} : échelle de force. Un écart de 100 points donne au plus fort environ 64~\% des
+points.
+
+\textbf{Fail-soft} : variante de l'alpha-bêta qui renvoie, quand un nœud est coupé, la borne la
+plus serrée possible plutôt que la borne de la fenêtre.
+
+\textbf{Kiwipete} : position de test classique pour le perft, riche en roques, en prises en
+passant et en promotions.
+
+\textbf{MVV/LVA} : \emph{Most Valuable Victim, Least Valuable Attacker}. Le moteur essaie d'abord
+la prise de la plus grosse pièce par la plus petite.
+
+\textbf{Perft} : nombre exact de positions atteignables en $d$ demi-coups. Il sert à valider un
 générateur de coups et à mesurer son débit.
-\item[Quiescence] Prolongement de la recherche limité aux prises, pour ne pas évaluer une position
-au milieu d'un échange.
-\item[uci-elo] Nos conditions de match, qui reproduisent la calibration de Stockfish, soit
+
+\textbf{Quiescence} : prolongement de la recherche limité aux prises, pour ne pas évaluer une
+position au milieu d'un échange.
+
+\textbf{uci-elo} : nos conditions de match qui reproduisent la calibration de Stockfish, soit
 60~s + 0,6~s, 1 thread et 16~Mo de table.
-\item[YBW] \emph{Young Brothers Wait}. On cherche l'aîné seul avant ses frères, pour obtenir une
-fenêtre qui permettra de les couper.
-\end{description}
+
+\textbf{YBW} : \emph{Young Brothers Wait}. Le moteur cherche l'aîné seul avant ses frères, pour
+obtenir une fenêtre qui permettra de les couper.
 
 \section{Reproduire}
 Depuis la racine du dépôt :
-\begin{verbatim}
+\begin{python}
 python docs/etudes/2026-11-25_synthese/gen_figures.py
 cd docs/etudes/2026-11-25_synthese && latexmk -pdf synthese.tex
 python -m unittest src.matrix_chess.test_engine src.matrix_chess.test_retro
 python -m unittest src.matrix_chess.test_gpu_engine
-\end{verbatim}
-Les autres documents du projet se trouvent aux emplacements suivants :
-\begin{itemize}
-\item le rapport de l'incrément 1 dans \code{docs/etudes/2026-11-24\_increment1-gpu/} ;
-\item le rapport de l'incrément 2 dans \code{docs/etudes/2026-11-24\_increment2/} ;
-\item la théorie de référence dans \code{docs/king\_matrix.md} et \code{docs/matrix\_chess.md}.
-\end{itemize}
+\end{python}
+Le script calcule les figures et toutes les valeurs de la partie~II depuis le moteur. Dans la
+partie~III, il recalcule le duel et trace les données figées des incréments. Une seule courbe
+reprend des valeurs publiées ailleurs, la perte par profondeur, tirée du rapport de l'incrément 1
+\cite{inc1}. La théorie de référence du dépôt se trouve dans \cite{theorie}.
 
 \end{document}

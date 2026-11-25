@@ -155,23 +155,23 @@ mesures de tri et de vagues sur GPU.
 
 ## 2026-11-25 — Synthèse : jouer aux échecs avec des matrices
 
-**Question.** Comment expliquer tout le projet d'une traite, de l'échiquier au GPU, en montant en
-complexité par l'exemple ?
+**Question.** Comment expliquer tout le projet d'une traite, de l'échiquier au GPU, en séparant
+ce qui relève de la théorie, de sa vérification et des mesures ?
 
-**Contenu.** Un rapport de 24 pages, chaque notion partant d'une position concrète puis passant à
-l'écriture formelle :
-- une position est une matrice, un déplacement est un décalage (roi et cavalier comme
-  convolutions, pièces glissantes comme propagation, échec comme produit élément par élément) ;
-- un coup est une matrice $T = I - E_{ff} - E_{tt} + k\,E_{tf}$ (coup simple, prise, promotion,
-  prise en passant, roque), une partie est un produit, la prise détruit de l'information ;
-- l'inversion par cimetière (matrices monomiales), la relation arrière et l'imposition d'un mat
-  étouffé ;
-- les lots sur GPU (70 plans, test d'échec vu du roi, bitboards, perft) ;
-- la recherche comme produit $(\max, +)$, l'alpha-bêta comme règle d'arrêt d'une convergence
-  d'intervalles $[L, U]$, les vagues par lots.
+**Contenu.** Un rapport de 29 pages, avec un résumé structuré (contexte, objectif, méthode,
+résultats, conclusion) et quatre parties de statut différent :
+- **I. Théorie.** Une position est une matrice, un déplacement est un décalage, un coup est une
+  matrice $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, une partie est un produit. Inversion par
+  cimetière, relation arrière, imposition d'une fin. Lots sur GPU (70 plans, test d'échec vu du
+  roi, bitboards). Recherche comme produit $(\max, +)$, alpha-bêta comme règle d'arrêt d'une
+  convergence d'intervalles $[L, U]$, vagues par lots.
+- **II. Calculs préparatoires.** Onze exemples chiffrés, chacun renvoyant à la section de théorie
+  qu'il vérifie, puis les tests de conformité relancés sur processeur : 77 tests, dont 76 réussis
+  et 1 réservé au GPU, et 9 263 positions identiques à `python-chess`.
+- **III. Résultats de l'étude.** Protocole, puis débit, force en partie, effet de l'élagage,
+  qualité des coups et duel.
+- **IV. Discussion.** Quatre leçons, les limites des mesures, et sept hypothèses classées, chacune
+  avec son protocole de mesure.
 
-Les expériences sont résumées en cinq fils conducteurs, suivis de sept hypothèses classées, chacune
-avec son protocole de mesure.
-
-**Données.** Aucune nouvelle mesure. `gen_figures.py` calcule les figures et les exemples chiffrés
-depuis le moteur et depuis les données figées des incréments 1 et 2.
+**Données.** Aucune nouvelle mesure sur GPU. `gen_figures.py` calcule les figures et les valeurs de
+la partie II depuis le moteur, et trace les données figées des incréments 1 et 2.

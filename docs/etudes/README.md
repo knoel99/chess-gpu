@@ -156,22 +156,27 @@ mesures de tri et de vagues sur GPU.
 ## 2026-11-25 — Synthèse : jouer aux échecs avec des matrices
 
 **Question.** Comment expliquer tout le projet d'une traite, de l'échiquier au GPU, en séparant
-ce qui relève de la théorie, de sa vérification et des mesures ?
+ce qui relève de la théorie, de sa vérification, du code et des mesures ?
 
-**Contenu.** Un rapport de 29 pages, avec un résumé structuré (contexte, objectif, méthode,
-résultats, conclusion) et quatre parties de statut différent :
-- **I. Théorie.** Une position est une matrice, un déplacement est un décalage, un coup est une
-  matrice $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, une partie est un produit. Inversion par
-  cimetière, relation arrière, imposition d'une fin. Lots sur GPU (70 plans, test d'échec vu du
-  roi, bitboards). Recherche comme produit $(\max, +)$, alpha-bêta comme règle d'arrêt d'une
-  convergence d'intervalles $[L, U]$, vagues par lots.
-- **II. Calculs préparatoires.** Onze exemples chiffrés, chacun renvoyant à la section de théorie
-  qu'il vérifie, puis les tests de conformité relancés sur processeur : 77 tests, dont 76 réussis
-  et 1 réservé au GPU, et 9 263 positions identiques à `python-chess`.
-- **III. Résultats de l'étude.** Protocole, puis débit, force en partie, effet de l'élagage,
+**Contenu.** Un rapport de 46 pages, avec un résumé structuré (contexte, objectif, méthode,
+résultats, conclusion) et cinq parties de statut différent :
+- **I. Théorie.** Douze propositions démontrées. Les six pièces une par une (pas fixe, rayons,
+  pion), la légalité, la matrice d'un coup $T = I - E_{ff} - E_{tt} + k\,E_{tf}$ et sa forme
+  réduite à six entiers, l'opérateur d'une partie, le cimetière et la relation arrière, les 70
+  plans, la symétrie de l'attaque, l'évaluation comme produit scalaire, negamax en $(\max, +)$ et
+  l'alpha-bêta comme convergence d'intervalles $[L, U]$.
+- **II. Calculs préparatoires.** Quatorze exemples chiffrés, chacun renvoyant à ce qu'il vérifie,
+  dont un par pièce (masque, matrice, forme réduite, plan) et une pièce clouée, puis les tests de
+  conformité relancés sur processeur : 77 tests, dont 76 réussis et 1 réservé au GPU, et 9 263
+  positions identiques à `python-chess`.
+- **III. Architecture du code et noyaux.** Les 14 modules et leurs dépendances, les trois
+  écritures d'un coup (dense, réduite, bitboards), le chemin d'un lot dans `expand`, le noyau CUDA
+  (un fil par position, clouages et masque de parade, trois passes, code d'un coup), le
+  `Searcher` et les outils de mesure avec leurs formules.
+- **IV. Résultats de l'étude.** Protocole, puis débit, force en partie, effet de l'élagage,
   qualité des coups et duel.
-- **IV. Discussion.** Quatre leçons, les limites des mesures, et sept hypothèses classées, chacune
+- **V. Discussion.** Quatre leçons, les limites des mesures, et sept hypothèses classées, chacune
   avec son protocole de mesure.
 
-**Données.** Aucune nouvelle mesure sur GPU. `gen_figures.py` calcule les figures et les valeurs de
-la partie II depuis le moteur, et trace les données figées des incréments 1 et 2.
+**Données.** Aucune nouvelle mesure sur GPU. `gen_figures.py` calcule les figures et les valeurs
+des parties II et III depuis le moteur, et trace les données figées des incréments 1 et 2.

@@ -1,0 +1,20 @@
+\begin{tabular}{l r >{\raggedright\arraybackslash}p{6.9cm} >{\raggedright\arraybackslash}p{3.3cm}}
+\toprule
+Module & Lignes & Rôle & Importe\\
+\midrule
+\code{engine.py} & 374 & Référence : masques par décalages, matrices $T$ denses, \code{Game}, nulles & aucun\\
+\code{reduced.py} & 79 & Forme réduite : plateaux $(N, 65)$, coups $(N, 6)$, étiquettes de $G$ & \code{engine}\\
+\code{reduced\_gpu.py} & 134 & La même forme réduite en PyTorch, masques d'attaque par lots & \code{engine}\\
+\code{gpu\_engine.py} & 587 & 70 plans, décodage, \code{expand}, \code{perft}, évaluation, \code{Searcher} & \code{engine}, \code{gpu\_kernels}, \code{reduced\_gpu}\\
+\code{gpu\_kernels.py} & 272 & Noyau CUDA fusionné : coups légaux en bitboards, un fil par parent & \code{engine}\\
+\code{retro.py} & 247 & Relation arrière, prédécesseurs, rencontre au milieu, prédicats de mat & \code{engine}\\
+\code{impose.py} & 150 & Synthèse des buts et imposition d'une condition finale & \code{engine}, \code{retro}\\
+\code{invert\_full\_game.py} & 149 & Espace à 94 dimensions, inversion d'une partie entière & \code{engine}\\
+\code{validate.py} & 70 & Comparaison des coups légaux et des nulles avec \code{python-chess} & \code{engine}\\
+\code{bench\_gpu.py} & 60 & Perft sur GPU contre \code{go perft} de Stockfish & \code{gpu\_engine}, \code{match}, \code{validate}\\
+\code{match.py} & 158 & Matchs contre Stockfish bridé, pendule, journal par coup & \code{engine}, \code{gpu\_engine}, \code{validate}\\
+\code{duel.py} & 135 & Duel apparié entre deux réglages, écart d'Elo et intervalle & \code{engine}, \code{gpu\_engine}, \code{match}, \code{validate}\\
+\code{analyse.py} & 277 & Évaluation Stockfish de chaque coup, filtre de qualité & \code{engine}, \code{gpu\_engine}, \code{validate}\\
+\code{webapp.py} & 509 & Interface web : parties, matrices $T$ et $G$, retour arrière & \code{engine}\\
+\bottomrule
+\end{tabular}

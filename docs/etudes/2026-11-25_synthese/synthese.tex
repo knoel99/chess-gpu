@@ -4,7 +4,7 @@
 \usepackage[french]{babel}
 \usepackage{lmodern}
 \usepackage[margin=2.2cm]{geometry}
-\usepackage{amsmath,amssymb}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{graphicx}
@@ -31,8 +31,11 @@
 \newcounter{calcul}
 \newcommand{\calcul}[2]{\refstepcounter{calcul}\subsection*{Calcul \thecalcul. #1}%
   \addcontentsline{toc}{subsection}{Calcul \thecalcul. #1}%
-  \noindent\textcolor{gris}{\small Vérifie la section~\ref{#2}.}\par\smallskip}
+  \noindent\textcolor{gris}{\small Vérifie #2.}\par\smallskip}
 \renewcommand{\thepart}{\Roman{part}}
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\renewcommand{\proofname}{Preuve}
 
 \title{Jouer aux échecs avec des matrices\\[4pt]
 \large Écrire les règles en algèbre linéaire, les exécuter sur GPU, et mesurer ce que cela vaut\\[2pt]
@@ -53,12 +56,14 @@ règles des échecs en opérations matricielles, les exécuter par lots sur GPU,
 moteur plus rapide, puis plus fort, que Stockfish.
 
 \smallskip\noindent\textbf{Méthode.} Nous codons une position par un vecteur de 64 entiers, un
-déplacement par un décalage de matrice, et un coup par une matrice $64\times64$. Nous en tirons
-une génération de coups par lots, une recherche écrite dans le semi-anneau $(\max,+)$, et un
-alpha-bêta exact formulé comme une convergence d'intervalles. Nous vérifions chaque écriture par
-un calcul du moteur sur processeur. Nous mesurons ensuite le débit par le test \emph{perft}, et
-la force par des matchs contre Stockfish 16 et par un duel de 200 parties entre deux versions du
-moteur, sur une RTX PRO 6000.
+déplacement par un décalage de matrice, et un coup par une matrice $64\times64$, que nous
+réduisons ensuite à une ligne de six entiers. Douze propositions démontrées fondent ces écritures.
+Nous en tirons une génération de coups par lots, une recherche écrite dans le semi-anneau
+$(\max,+)$, et un alpha-bêta exact formulé comme une convergence d'intervalles. Le code suit trois
+niveaux, une référence en \code{numpy}, une forme réduite en PyTorch et un noyau CUDA en
+bitboards. Nous vérifions chaque écriture par un calcul du moteur sur processeur. Nous mesurons
+ensuite le débit par le test \emph{perft}, et la force par des matchs contre Stockfish 16 et par
+un duel de 200 parties entre deux versions du moteur, sur une RTX PRO 6000.
 
 \smallskip\noindent\textbf{Résultats.} Sur la position Kiwipete, le GPU compte les positions
 157 fois plus vite que Stockfish sur un cœur. Ce débit ne suffit pas, car la recherche en pleine
@@ -80,34 +85,37 @@ de mesure.
 \addcontentsline{toc}{section}{Vue d'ensemble}
 
 Ce rapport reprend le projet \code{chess-gpu} depuis le début. Il s'adresse à un lecteur qui
-connaît les règles des échecs et le produit de matrices, sans plus. Il est divisé en quatre
+connaît les règles des échecs et le produit de matrices, sans plus. Il est divisé en cinq
 parties, dont les affirmations n'ont pas le même statut.
 
 \begin{table}[H]
 \centering\small
-\begin{tabular}{>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{6.2cm}}
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{5.9cm}>{\raggedright\arraybackslash}p{5.9cm}}
 \toprule
 Partie & Ce que vous y trouvez & Comment c'est établi\\
 \midrule
-\textbf{I. Théorie} & Les définitions, les formules et leurs propriétés, illustrées par des
-schémas. & Par le raisonnement. Rien n'y dépend d'une mesure.\\
-\textbf{II. Calculs préparatoires} & Les exemples chiffrés et les tests de conformité qui
-vérifient la théorie. & Par un calcul exact du moteur, sur processeur. Le résultat est le même à
+\textbf{I. Théorie} & Les définitions, les formules et douze propositions, pièce par pièce, du
+plateau à la recherche. & Par le raisonnement. Chaque proposition a sa preuve. Rien n'y dépend
+d'une mesure.\\
+\textbf{II. Calculs préparatoires} & Les exemples chiffrés, une pièce après l'autre, et les
+tests de conformité. & Par un calcul exact du moteur, sur processeur. Le résultat est le même à
 chaque exécution.\\
-\textbf{III. Résultats de l'étude} & Le débit sur GPU, les matchs contre Stockfish, la qualité
+\textbf{III. Architecture du code} & Les modules, les trois écritures d'un coup, le noyau CUDA
+et la recherche. & Par la lecture du code source du dépôt.\\
+\textbf{IV. Résultats de l'étude} & Le débit sur GPU, les matchs contre Stockfish, la qualité
 des coups, le duel. & Par des mesures sur GPU et des parties jouées. Elles ont une incertitude.\\
-\textbf{IV. Discussion} & Les leçons, les limites et sept hypothèses pour la suite. & Par
+\textbf{V. Discussion} & Les leçons, les limites et sept hypothèses pour la suite. & Par
 l'interprétation des résultats. Les hypothèses ne sont pas encore mesurées.\\
 \bottomrule
 \end{tabular}
-\caption{Les quatre parties du rapport et le statut de ce qu'elles affirment.}
+\caption{Les cinq parties du rapport et le statut de ce qu'elles affirment.}
 \end{table}
 
 \begin{note}
-Chaque calcul de la partie~II renvoie à la section de théorie qu'il vérifie. Vous pouvez lire la
-théorie d'une traite, puis les calculs, ou passer de l'une aux autres section par section. Les
-termes \emph{perft}, \emph{Kiwipete}, \emph{YBW}, \emph{MVV/LVA} ou \emph{fail-soft} sont définis
-dans le glossaire, en annexe~B. Les notations sont rassemblées en annexe~A.
+Chaque calcul de la partie~II renvoie à la section ou à la proposition qu'il vérifie. Vous pouvez
+lire la théorie d'une traite, puis les calculs, ou passer de l'une aux autres section par section.
+Les termes \emph{perft}, \emph{Kiwipete}, \emph{YBW}, \emph{MVV/LVA} ou \emph{fail-soft} sont
+définis dans le glossaire, en annexe~B. Les notations sont rassemblées en annexe~A.
 \end{note}
 
 Vous pouvez tout reproduire. Les extraits de code s'exécutent tels quels depuis la racine du
@@ -133,11 +141,11 @@ Nous sommes partis de trois questions, dans cet ordre.
 \item \textbf{Peut-on écrire toutes les règles en matrices ?} C'est la condition pour que le
 calcul soit identique d'une position à l'autre. Les parties~I et~II y répondent.
 \item \textbf{Le GPU va-t-il alors plus vite que Stockfish ?} Nous comparons le nombre de
-positions comptées par seconde. La partie~III y répond.
+positions comptées par seconde. Les parties~III et~IV y répondent.
 \item \textbf{Ce débit donne-t-il un moteur plus fort ?} Nous comparons les résultats en partie.
-La partie~III y répond aussi.
+La partie~IV y répond.
 \end{itemize}
-La réponse est oui aux deux premières et non à la troisième. La partie~IV explique pourquoi.
+La réponse est oui aux deux premières et non à la troisième. La partie~V explique pourquoi.
 
 \subsection*{Le parcours du projet}
 Le projet a avancé en quatre étapes. Chacune a répondu à une question et en a soulevé une autre.
@@ -172,9 +180,11 @@ contre celui de l'incrément 1, sur 200 parties.\\
 \clearpage
 \part{Théorie : écrire les échecs en matrices}
 
-Cette partie ne contient que des définitions, des formules et des schémas. Aucune mesure n'y
-intervient. Elle avance par complexité croissante, de la case au coup, du coup à la partie, de la
-partie au lot de positions, puis à la recherche du meilleur coup.
+Cette partie ne contient que des définitions, des formules, des propositions et des schémas.
+Aucune mesure n'y intervient. Elle avance par complexité croissante, de la case à la pièce, de la
+pièce au coup, du coup à la partie, de la partie au lot de positions, puis à la recherche du
+meilleur coup. Les douze propositions sont numérotées. La partie~II vérifie chacune d'elles sur
+un exemple, et la partie~III dit où le code les applique.
 
 \section{La position et les déplacements}
 
@@ -194,20 +204,37 @@ h8 vaut~7, a1 vaut~56 et h1 vaut~63.
 positives (pièces blanches), les cases orange sont négatives (pièces noires).}
 \end{figure}
 
-\subsection{Un déplacement est un décalage}\label{th:decalage}
+Trois masques reviennent dans toutes les formules. Pour le camp au trait, de couleur
+$\varepsilon = \pm1$, nous notons $\text{vide} = [B = 0]$, $\text{ami} = [\varepsilon B > 0]$ et
+$\text{adverse} = [\varepsilon B < 0]$. Le crochet $[\,\cdot\,]$ vaut 1 sur les cases où la
+condition est vraie et 0 ailleurs.
+
+\subsection{Le décalage, opération de base}\label{th:decalage}
 Placez un 1 sur la case d4 et des 0 partout ailleurs. Vous obtenez une matrice $P$ qui marque une
 pièce. Décaler $P$ d'une ligne vers le haut marque d5. La décaler de deux lignes vers le haut et
 d'une colonne vers la droite marque e6, soit un saut de cavalier. Nous notons
-$\shift(P, d_r, d_c)$ ce décalage, où des zéros entrent par le bord. Le décalage est lui-même un
-produit de matrices. Si $S_d$ désigne la matrice $8\times8$ qui porte des 1 sur sa $d$-ième
-diagonale, alors
-\[ \shift(M, d_r, d_c) = S_{d_r}\, M\, S_{d_c}^{\top}. \]
+$\shift(P, d_r, d_c)$ ce décalage, où des zéros entrent par le bord.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/decalage.pdf}
 \caption{Le décalage déplace tous les 1 en même temps. À droite, un seul décalage fait avancer les
 huit pions blancs.}
 \end{figure}
+
+\begin{proposition}[Le décalage est un produit de matrices]\label{prop:decalage}
+Soit $S_d$ la matrice $8\times8$ dont le coefficient $(i, k)$ vaut 1 si $k = i - d$ et 0 sinon.
+Pour toute matrice $M$ de taille $8\times8$,
+\[ \shift(M, d_r, d_c) = S_{d_r}\, M\, S_{d_c}^{\top}, \]
+c'est-à-dire, coefficient par coefficient,
+\[ \shift(M, d_r, d_c)_{ij} = \begin{cases} M_{i-d_r,\,j-d_c} & \text{si cette case existe,}\\ 0 &
+\text{sinon.}\end{cases} \]
+\end{proposition}
+\begin{proof}
+Par définition du produit, $(S_{d_r} M)_{ij} = \sum_k (S_{d_r})_{ik} M_{kj}$. Le seul terme non
+nul est celui où $k = i - d_r$, et il n'existe que si $0 \le i - d_r \le 7$. Donc
+$(S_{d_r} M)_{ij} = M_{i-d_r,\,j}$, ou 0 si la ligne sort du plateau. Le même calcul à droite
+avec $S_{d_c}^{\top}$ décale les colonnes.
+\end{proof}
 
 Le reste du moteur repose sur deux conséquences.
 \begin{itemize}
@@ -217,10 +244,27 @@ disparaît.
 des millions de plateaux, ce que le GPU exploitera.
 \end{itemize}
 
-\subsection{Le roi et le cavalier : des convolutions}\label{th:roi}
-Le roi avance d'une case dans l'une des huit directions. Ses destinations forment l'union de huit
-décalages de $P$, c'est-à-dire une convolution de $P$ par un noyau $3\times3$ rempli de 1, sauf
-en son centre. Le cavalier suit le même principe, avec huit sauts et un noyau $5\times5$.
+\subsection{Le roi et le cavalier : des pièces à pas fixe}\label{th:roi}
+Le roi avance d'une case dans l'une des huit directions. Le cavalier fait l'un de huit sauts.
+Dans les deux cas, la pièce dispose d'un ensemble fixe $D$ de pas $(d_r, d_c)$, quelle que soit
+la position.
+\[ D_{\text{roi}} = \{-1, 0, 1\}^2 \setminus \{(0,0)\},\qquad
+D_{\text{cavalier}} = \{(\pm1, \pm2), (\pm2, \pm1)\}. \]
+
+\begin{proposition}[Pièces à pas fixe]\label{prop:pas}
+Soit $P$ le masque d'une pièce à pas fixe, d'ensemble de pas $D$. Ses destinations
+pseudo-légales forment le masque
+\[ M = \Bigl(\bigvee_{d \in D} \shift(P, d)\Bigr) \wedge \neg\,\mathrm{ami}. \]
+La somme $\sum_{d\in D}\shift(P, d)$ est la convolution de $P$ par le noyau $K_D$, qui vaut 1
+aux positions des pas et 0 ailleurs.
+\end{proposition}
+\begin{proof}
+D'après la proposition~\ref{prop:decalage}, $\shift(P, d)$ marque la case d'arrivée du pas $d$ si
+elle existe, et rien sinon. L'union sur $D$ marque donc toutes les cases d'arrivée possibles. La
+pièce peut s'y poser si la case est vide ou occupée par une pièce adverse, ce qu'exprime
+$\neg\,\mathrm{ami}$. Enfin, la somme de copies décalées d'une matrice est par définition sa
+convolution par le noyau des décalages.
+\end{proof}
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/roi_cavalier.pdf}
@@ -228,17 +272,33 @@ en son centre. Le cavalier suit le même principe, avec huit sauts et un noyau $
 plateau s'annulent et il en reste 3. Appliqués à un plateau rempli de 1, les huit décalages
 comptent les cases atteignables depuis chaque case. En répétant la dilatation, on obtient la
 distance du roi, c'est-à-dire la distance de Chebyshev $\max(|\Delta i|,|\Delta j|)$. En bas, le
-cavalier.}
+cavalier et son noyau $5\times5$.}
 \end{figure}
 
-\subsection{Les pièces glissantes : une propagation}\label{th:glisseur}
-La tour, le fou et la dame avancent jusqu'à la première pièce rencontrée. Un seul décalage ne
-suffit pas. Nous propageons un front, pas à pas :
+\subsection{Le fou, la tour et la dame : des pièces glissantes}\label{th:glisseur}
+La tour, le fou et la dame avancent dans une direction jusqu'à la première pièce rencontrée. Un
+seul décalage ne suffit pas. Nous propageons un front, pas à pas :
 \[ \text{front}_1 = \shift(P, d),\qquad \text{front}_{k+1} = \shift(\text{front}_k \wedge
-\text{vide},\ d),\qquad A = \bigvee_{k=1}^{7}\text{front}_k. \]
-Le terme $\wedge\,\text{vide}$ arrête le front sur la première pièce rencontrée. Le front atteint
-cette pièce sans la traverser. Nous retirons ensuite les cases occupées par des pièces amies :
-\[ \text{coups} = A \wedge (\text{vide} \vee \text{adverse}). \]
+\text{vide},\ d),\qquad A_d = \bigvee_{k=1}^{7}\text{front}_k. \]
+
+\begin{proposition}[Propagation d'un rayon]\label{prop:rayon}
+Soit une pièce en $s$ et une direction $d$. Le masque $\text{front}_k$ marque la case $s + kd$ si
+et seulement si cette case existe et si les cases $s + d, \dots, s + (k-1)d$ sont vides. Le masque
+$A_d$ contient donc les cases du rayon jusqu'à la première case occupée, celle-ci comprise.
+\end{proposition}
+\begin{proof}
+Par récurrence sur $k$. Pour $k = 1$, $\text{front}_1 = \shift(P, d)$ marque $s + d$ si elle
+existe, sans autre condition. Supposons la propriété vraie au rang $k$. Le masque
+$\text{front}_k \wedge \text{vide}$ garde $s + kd$ seulement si cette case est vide, et le
+décalage la porte en $s + (k+1)d$. Donc $\text{front}_{k+1}$ marque $s + (k+1)d$ si et seulement
+si les cases $s + d, \dots, s + kd$ sont vides. Le plateau a 8 cases de large, donc 7 pas
+suffisent.
+\end{proof}
+
+Les destinations pseudo-légales d'une pièce glissante sont alors
+\[ M = \Bigl(\bigvee_{d\in D} A_d\Bigr) \wedge (\text{vide} \vee \text{adverse}), \]
+où $D$ contient les 4 diagonales pour le fou, les 4 directions orthogonales pour la tour, et les 8
+pour la dame.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/glisseur.pdf}
@@ -248,26 +308,67 @@ le pion noir g4. Au milieu, le masque avant filtrage contient encore b4. À droi
 retire b4, qui porte une pièce amie, et garde d7 et g4, qui sont des prises.}
 \end{figure}
 
-Chaque direction demande au plus 7 pas. Le fou suit les 4 diagonales, la tour les 4 directions
-orthogonales, la dame les 8.
+\subsection{Le pion}\label{th:pion}
+Le pion est la seule pièce qui ne prend pas comme elle avance, et la seule dont le sens dépend de
+la couleur. Notons $a = -\varepsilon$ le sens d'avance, soit $-1$ pour les blancs, qui montent
+vers la ligne 0. Ses quatre sortes de coups restent des décalages assortis de conditions.
+\begin{align*}
+\text{avance simple} &: M_1 = \shift(P, a, 0) \wedge \text{vide},\\
+\text{avance double} &: M_2 = \shift(M_1, a, 0) \wedge \text{vide},\quad\text{si le pion est sur sa
+rangée de départ,}\\
+\text{prises} &: M_\times = \bigl(\shift(P, a, -1) \vee \shift(P, a, +1)\bigr) \wedge
+(\text{adverse} \vee [\text{case de prise en passant}]).
+\end{align*}
+L'avance double réutilise $M_1$, ce qui garantit que la case intermédiaire est vide. Un pion qui
+atteint la dernière rangée se transforme, ce que la section~\ref{th:speciaux} écrit par un
+coefficient.
 
-\subsection{Les pions, le roque et l'échec}\label{th:echec}
-Les pions ne se déplacent pas comme ils prennent, mais leurs coups restent des décalages assortis
-de conditions. L'avance simple des blancs s'écrit $\shift(\text{pions}, -1, 0) \wedge
-\text{vide}$. L'avance double exige en plus la rangée de départ et deux cases vides. Les prises
-sont les deux décalages diagonaux, restreints aux pièces adverses et à la case de prise en
-passant. Le roque se vérifie en lisant quelques cases.
+\subsection{Les six pièces en un tableau}\label{th:catalogue}
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{1.5cm}c>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{5.2cm}>{\raggedright\arraybackslash}p{2.6cm}}
+\toprule
+Pièce & Code & Déplacement & Masque des destinations & Proposition\\
+\midrule
+Pion & 1 & 1 pas, 2 depuis la rangée de départ, prise en diagonale &
+$M_1 \vee M_2 \vee M_\times$ & section~\ref{th:pion}\\
+Cavalier & 2 & 8 sauts & $\bigvee_{d\in D_{\text{cavalier}}}\shift(P,d) \wedge \neg\,\mathrm{ami}$ &
+proposition~\ref{prop:pas}\\
+Fou & 3 & 4 diagonales, glissant & $\bigvee_{d\ \text{diag.}} A_d \wedge \neg\,\mathrm{ami}$ &
+proposition~\ref{prop:rayon}\\
+Tour & 4 & 4 directions orthogonales, glissante & $\bigvee_{d\ \text{orth.}} A_d \wedge
+\neg\,\mathrm{ami}$ & proposition~\ref{prop:rayon}\\
+Dame & 5 & 8 directions, glissante & $\bigvee_{d} A_d \wedge \neg\,\mathrm{ami}$ &
+proposition~\ref{prop:rayon}\\
+Roi & 6 & 8 directions, 1 pas, et le roque & $\bigvee_{d\in D_{\text{roi}}}\shift(P,d) \wedge
+\neg\,\mathrm{ami}$ & proposition~\ref{prop:pas}\\
+\bottomrule
+\end{tabular}
+\caption{Les coups pseudo-légaux des six pièces. Le calcul~\ref{ca:pieces} donne un exemple chiffré
+par pièce.}
+\end{table}
 
-Le masque des cases attaquées par les blancs, $\mathrm{att}_{\text{blancs}}$, est l'union des
-masques de toutes leurs pièces. Le roi noir est en échec si ce masque contient sa case. En
-matrices, c'est un produit élément par élément, puis une somme :
+\subsection{L'échec et la légalité}\label{th:echec}
+Les masques précédents donnent les coups \emph{pseudo-légaux}. Ils respectent le déplacement des
+pièces, mais peuvent laisser le roi en prise. Le masque des cases attaquées par un camp,
+$\mathrm{att}$, est l'union des masques de toutes ses pièces, où le pion ne compte que par ses
+deux diagonales. Le roi noir est en échec si le masque des blancs contient sa case :
 \[ \text{échec} \iff \sum_{i,j} \bigl(\mathrm{att}_{\text{blancs}} \odot [B = -6]\bigr)_{ij} > 0. \]
+Un coup pseudo-légal est \emph{légal} si, après le coup, le roi du camp qui vient de jouer n'est
+pas en échec. Cette seule condition couvre les trois cas des règles : le roi ne va pas sur une
+case attaquée, une pièce clouée ne quitte pas sa ligne de clouage, et un camp en échec doit le
+parer. Le roque exige en plus que le roi et la tour n'aient jamais bougé, que les cases entre eux
+soient vides, et que le roi ne soit pas en échec et ne traverse aucune case attaquée.
+
+La fin de partie se lit sur les mêmes objets. Il y a \emph{mat} si le camp au trait est en échec
+et n'a aucun coup légal, et \emph{pat} s'il n'est pas en échec et n'a aucun coup légal. La partie
+est nulle aussi quand le matériel ne permet plus de mater, après 100 demi-coups sans prise ni
+coup de pion, ou quand la même position revient trois fois.
 
 \begin{note}
-\textbf{À retenir.} Une position est un vecteur de 64 entiers. Toutes les règles de déplacement
-s'écrivent avec des décalages et des opérations logiques case par case, sans boucle sur les
-pièces ni test de bord. La même formule s'applique à un plateau seul ou à un lot de plateaux de
-forme $(N, 8, 8)$.
+\textbf{À retenir.} Une position est un vecteur de 64 entiers. Les coups des six pièces s'écrivent
+avec des décalages et des opérations logiques case par case, sans boucle sur les pièces ni test de
+bord. La légalité se ramène à une seule question, posée après le coup : le roi est-il attaqué ?
 \end{note}
 
 \section{Les coups}
@@ -275,73 +376,170 @@ forme $(N, 8, 8)$.
 \subsection{Un coup est une matrice}\label{th:coup}
 Jouer e2-e4, c'est vider e2 et poser en e4 ce qui se trouvait en e2. Soit $f$ la case de départ,
 $t$ la case d'arrivée, et $E_{ab}$ la matrice $64\times64$ qui contient un seul 1, en ligne $a$
-et colonne $b$. Alors
-\[ T = I - E_{ff} - E_{tt} + E_{tf},\qquad b' = T\,b. \]
-\begin{itemize}
-\item $-E_{ff}$ annule la ligne $f$, et la case de départ devient vide.
-\item $-E_{tt}$ annule la ligne $t$, et le contenu de la case d'arrivée disparaît.
-\item $+E_{tf}$ copie $b_f$ dans $b'_t$, et la pièce arrive.
-\end{itemize}
+et colonne $b$. Soit enfin $e_s$ le vecteur qui vaut 1 en $s$ et 0 ailleurs.
+
+\begin{proposition}[Matrice d'un coup]\label{prop:coup}
+Soit $f \ne t$ et $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, avec $k \ne 0$. Alors :
+\begin{enumerate}
+\item $(Tb)_t = k\,b_f$, $(Tb)_f = 0$, et $(Tb)_s = b_s$ pour toute autre case $s$ ;
+\item $T$ est de rang 63, et son noyau est la droite engendrée par $e_t$ ;
+\item la matrice $R = I - E_{ff} - E_{tt} + \tfrac1k E_{ft}$ vérifie $R\,T\,b = b$ dès que
+$b_t = 0$.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(1) La ligne $t$ de $T$ ne contient que $k$, en colonne $f$. La ligne $f$ est nulle. Les autres
+lignes sont celles de l'identité. (2) On a $T e_t = e_t - e_t = 0$, donc $e_t$ est dans le noyau.
+Les images des 63 autres vecteurs de base sont $k\,e_t$ pour $e_f$ et $e_s$ pour les autres. Elles
+sont indépendantes, donc le rang vaut 63. (3) $R$ recopie $\tfrac1k (Tb)_t = b_f$ en $f$ et met 0
+en $t$. On retrouve $b$ si et seulement si $b_t$ valait 0.
+\end{proof}
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/coup_pion.pdf}
-\caption{e2-e4. Les points bleus marquent les destinations du pion. La matrice $T$ est presque
-l'identité (diagonale grise). Sa diagonale s'annule en e2 et en e4 (rouge), et un seul coefficient
-se trouve hors de la diagonale (bleu), en ligne e4 et colonne e2.}
+\caption{e2-e4. De gauche à droite : le plateau et les destinations du pion, le masque $M$ de la
+section~\ref{th:pion}, le plateau après le coup, et la matrice $T$. Elle est presque l'identité
+(diagonale grise). Sa diagonale s'annule en e2 et en e4 (rouge), et un seul coefficient se trouve
+hors de la diagonale (bleu), en ligne e4 et colonne e2.}
 \end{figure}
 
-Une matrice de retour $R = I - E_{ff} - E_{tt} + E_{ft}$ défait le déplacement. Elle remet en $f$
-ce qui se trouve en $t$.
+Le point (2) a une lecture directe. Le noyau de $T$ est la case d'arrivée. Tout ce qui s'y
+trouvait avant le coup est envoyé sur zéro. Si la case était vide, rien n'est perdu. Si elle
+portait une pièce, c'est une prise, et $T$ ne contient plus de quoi la retrouver.
 
 \subsection{La prise et les coups spéciaux}\label{th:speciaux}
-\textbf{La prise.} Une prise a la même matrice qu'un coup simple. Seul $b$ diffère, car la case
-$t$ n'était pas vide. Le terme $-E_{tt}$ efface alors une pièce. La matrice $T$ est singulière,
-et la pièce prise appartient à son noyau. Revenir en arrière demande donc une information que $T$
-a effacée.
+\textbf{La prise.} Une prise a la même matrice qu'un coup simple, avec $k = 1$. Seul $b$ diffère,
+car $b_t \ne 0$.
 
-\textbf{La promotion.} Nous remplaçons le 1 de $E_{tf}$ par un coefficient $k$, ce qui donne
-$T = I - E_{ff} - E_{tt} + k\,E_{tf}$. Le pion blanc vaut $+1$, donc la case d'arrivée reçoit
-$k\cdot(+1) = +5$, une dame. Un pion noir donne $-5$. Le même coefficient sert aux deux camps, et
-le retour divise par $k$.
+\textbf{La promotion.} Le coefficient $k$ vaut 5 pour une dame, 4 pour une tour, 3 pour un fou et
+2 pour un cavalier. Le pion blanc vaut $+1$, donc la case d'arrivée reçoit $k\cdot(+1) = +k$. Un
+pion noir donne $-k$. Le même coefficient sert aux deux camps, et le retour divise par $k$.
 
-\textbf{La prise en passant.} Le pion pris se trouve à côté de la case d'arrivée. Nous ajoutons
-$-E_{cc}$ pour vider cette troisième case $c$.
+\textbf{La prise en passant.} Le pion pris se trouve à côté de la case d'arrivée, sur la case $c$.
+Nous ajoutons $-E_{cc}$ pour la vider :
+\[ T = I - E_{ff} - E_{tt} - E_{cc} + E_{tf}. \]
+Deux lignes sont nulles, et le rang tombe à 62.
 
-\textbf{Le roque.} Nous superposons deux coups simples, celui du roi et celui de la tour, dans la
-même matrice :
+\textbf{Le roque.} Nous superposons deux coups simples, celui du roi de $f$ vers $t$ et celui de
+la tour de $f'$ vers $t'$, dans la même matrice :
 \[ T = I - E_{ff} - E_{tt} + E_{tf} - E_{f'f'} - E_{t't'} + E_{t'f'}. \]
+Le rang vaut aussi 62.
+
+\subsection{La forme réduite : six entiers par coup}\label{th:reduit}
+La matrice $T$ a 4\,096 coefficients, dont 62 à 64 seulement diffèrent de zéro, et presque tous
+recopient l'identité. Nous n'avons pas besoin de la construire.
+
+\begin{proposition}[Forme réduite d'un coup]\label{prop:reduit}
+Ajoutons au vecteur $b$ une 65\textsuperscript{e} coordonnée, la \emph{sentinelle}, d'indice 64
+et de valeur 0. Décrivons un coup par la ligne $(f, t, k, c, f', t')$, où $k = 1$ sans promotion,
+et où $c$, $f'$ et $t'$ valent 64 quand le coup n'est ni une prise en passant ni un roque. Alors
+$b' = T\,b$ s'obtient par cinq écritures, toutes lues sur l'ancien vecteur $b$ :
+\[ b'_t = k\,b_f,\qquad b'_f = 0,\qquad b'_c = 0,\qquad b'_{t'} = b_{f'},\qquad b'_{f'} = 0. \]
+La sentinelle reste nulle après le coup.
+\end{proposition}
+\begin{proof}
+Pour un coup simple, une prise ou une promotion, les deux premières écritures sont le point (1)
+de la proposition~\ref{prop:coup}. Les trois autres portent sur l'indice 64. Elles écrivent 0,
+ou $b_{64}$ qui vaut 0, dans la sentinelle. Pour la prise en passant, $b'_c = 0$ est l'effet de
+$-E_{cc}$. Pour le roque, les deux dernières écritures sont le point (1) appliqué à la tour. Dans
+tous les cas, la coordonnée 64 ne reçoit que des zéros.
+\end{proof}
+
+La sentinelle évite tout cas particulier. Les quatre sortes de coups suivent le même chemin de
+calcul, ce qui est la condition pour les traiter par lots.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{5.6cm}lcc}
+\toprule
+Coup & Matrice $T$ & Ligne $(f, t, k, c, f', t')$ & Écritures utiles & Rang\\
+\midrule
+Simple ou prise & $I - E_{ff} - E_{tt} + E_{tf}$ & $(f, t, 1, 64, 64, 64)$ & 2 & 63\\
+Promotion & $I - E_{ff} - E_{tt} + k\,E_{tf}$ & $(f, t, k, 64, 64, 64)$ & 2 & 63\\
+Prise en passant & $I - E_{ff} - E_{tt} - E_{cc} + E_{tf}$ & $(f, t, 1, c, 64, 64)$ & 3 & 62\\
+Roque & $I - E_{ff} - E_{tt} + E_{tf} - E_{f'f'} - E_{t't'} + E_{t'f'}$ & $(f, t, 1, 64, f', t')$ &
+4 & 62\\
+\bottomrule
+\end{tabular}
+\caption{Les quatre sortes de coups, en matrice et en forme réduite. Les six pièces n'utilisent
+que la première ligne, sauf le pion (promotion, prise en passant) et le roi (roque).}
+\end{table}
 
 \subsection{Une partie est un produit de matrices}\label{th:partie}
-Jouer $n$ coups revient à multiplier $n$ matrices, $b_n = T_n \cdots T_1\, b_0 = G\, b_0$. Chaque
-ligne de $G$ contient au plus un coefficient non nul, et deux lignes n'en ont jamais dans la même
-colonne. Une telle matrice est une \emph{permutation partielle pondérée}. Elle se stocke dans deux
-plateaux d'étiquettes. Pour chaque case $i$, $\mathrm{src}_i$ indique de quelle case initiale
-vient son contenu, et $\mathrm{coef}_i$ le facteur qui le multiplie, soit 0 si la case a été
-vidée et $k$ après une promotion. On a alors
-\[ b_n[i] = \mathrm{coef}_i\cdot b_0[\mathrm{src}_i], \]
-sans aucune matrice $64\times64$. Le rang de $G$ est le nombre de ses lignes non nulles. Ses
-colonnes nulles désignent ce que la partie a effacé.
+Jouer $n$ coups revient à multiplier $n$ matrices, $b_n = T_n \cdots T_1\, b_0 = G\, b_0$.
+Appelons \emph{permutation partielle pondérée} une matrice qui a au plus un coefficient non nul
+par ligne et au plus un par colonne.
+
+\begin{proposition}[L'opérateur d'une partie]\label{prop:partie}
+Toute matrice de coup est une permutation partielle pondérée, et le produit de deux telles
+matrices en est une. L'opérateur $G$ se décrit donc par deux tableaux de 64 valeurs,
+$\mathrm{src}$ et $\mathrm{coef}$, tels que $b_n[i] = \mathrm{coef}_i\cdot
+b_0[\mathrm{src}_i]$. Jouer un coup de plus les met à jour par les écritures de la
+proposition~\ref{prop:reduit} :
+\[ \mathrm{src}'_t = \mathrm{src}_f,\qquad \mathrm{coef}'_t = k\,\mathrm{coef}_f,\qquad
+\mathrm{coef}'_f = 0, \]
+et de même pour la case $c$ et pour la tour du roque. Le rang de $G$ est le nombre de cases $i$
+telles que $\mathrm{coef}_i \ne 0$.
+\end{proposition}
+\begin{proof}
+La matrice $T$ a une ligne nulle ($f$), une colonne nulle ($t$), le coefficient $k$ en $(t, f)$
+et des 1 sur le reste de la diagonale. Elle a donc au plus un coefficient non nul par ligne et par
+colonne. Si $A$ et $B$ ont cette propriété, la ligne $i$ de $AB$ est un multiple d'une seule
+ligne de $B$, donc elle a au plus un coefficient non nul, et le même raisonnement vaut pour les
+colonnes. Enfin, la ligne $t$ de $TG$ vaut $k$ fois la ligne $f$ de $G$, la ligne $f$ de $TG$
+est nulle, et les autres lignes sont inchangées. Ce sont les écritures annoncées.
+\end{proof}
+
+Les étiquettes se lisent sur l'échiquier. $\mathrm{src}_i$ indique de quelle case initiale vient
+le contenu de la case $i$. Une colonne nulle de $G$ désigne une case initiale dont le contenu a
+disparu, par exemple une pièce prise.
 
 \subsection{Revenir en arrière}\label{th:retour}
-Un coup sans prise s'inverse sans difficulté, car $R\,T\,b = b$. Avec une prise, il manque la
-pièce effacée. Trois écritures traitent ce cas.
+D'après la proposition~\ref{prop:coup}, un coup sans prise s'inverse par $R$. Avec une prise, il
+manque la pièce effacée. Trois écritures traitent ce cas.
 
 \textbf{L'inverse affine.} Nous conservons à part la liste des pièces prises. Le retour s'écrit
 $b = R\,b' + \text{correction}$, où la correction remet la pièce prise sur sa case.
 
 \textbf{Le cimetière.} Nous ajoutons au vecteur 30 cases, une par pièce capturable, ce qui donne
 $x\in\mathbb{Z}^{94}$. Une prise devient un cycle de trois cases. La pièce qui prend va en $t$, la
-pièce prise va au cimetière, et la case de départ reçoit le vide qui occupait le cimetière. Chaque
-coup devient une matrice \emph{monomiale} $\tilde T$, qui a un seul coefficient non nul par ligne
-et par colonne. Une telle matrice est inversible. Sur toute une partie, le produit $\tilde G$
-reste monomial, et une seule multiplication par $\tilde G^{-1}$ ramène l'état final à la position
-de départ.
+pièce prise va au cimetière, et la case de départ reçoit le vide qui occupait le cimetière.
+
+\begin{proposition}[Coups inversibles dans l'espace étendu]\label{prop:cimetiere}
+Dans l'espace à 94 dimensions, un coup simple est la transposition des cases $f$ et $t$. Une
+prise est le cycle qui envoie $f$ sur $t$, $t$ sur une case libre $g$ du cimetière, et $g$ sur
+$f$. La matrice $\tilde T$ d'un coup sans promotion est donc une matrice de permutation, et
+$\tilde T^{-1} = \tilde T^{\top}$. Avec une promotion, $\tilde T = \Delta\,\Pi$, où $\Pi$ est une
+permutation et $\Delta$ la matrice diagonale qui porte $k$ en $t$, et
+$\tilde T^{-1} = \Pi^{\top} \Delta^{-1}$. Le produit $\tilde G$ de tous les coups d'une partie est
+inversible.
+\end{proposition}
+\begin{proof}
+Pour un coup simple, $x_t = 0$ avant le coup. Échanger les coordonnées $f$ et $t$ pose donc la
+pièce en $t$ et le zéro en $f$. Pour une prise, $x_g = 0$, et le cycle pose la pièce en $t$, la
+pièce prise en $g$ et le zéro en $f$. Une matrice de permutation est orthogonale, d'où son
+inverse. Un produit de matrices inversibles est inversible.
+\end{proof}
 
 \textbf{La relation arrière.} Si nous ne conservons rien, l'inverse d'un coup n'est plus une
-fonction mais une \emph{relation} :
-\[ b_{\text{prev}} = R\,b + c\,e_t,\qquad c\in\{0\}\cup\{\text{pièces adverses restaurables}\}. \]
-Le paramètre libre $c$ représente l'information détruite par la prise. En marche arrière, chaque
-valeur possible de $c$ ouvre une branche.
+fonction mais une relation.
+
+\begin{proposition}[Les prédécesseurs d'une position]\label{prop:arriere}
+Soit $b$ une position obtenue par un coup de $f$ vers $t$, sans promotion, prise en passant ni
+roque. Les vecteurs $x$ tels que $T\,x = b$ sont exactement
+\[ x = R\,b + c\,e_t,\qquad c \in \mathbb{Z}. \]
+Parmi eux, les positions d'échecs sont celles où $c = 0$ (coup sans prise) ou $c$ est une pièce
+adverse (prise).
+\end{proposition}
+\begin{proof}
+Après le coup, $b_f = 0$. Le vecteur $R\,b$ porte $b_t$ en $f$ et 0 en $t$, donc $T R\,b = b$.
+Comme $T e_t = 0$ (proposition~\ref{prop:coup}), on a $T(R\,b + c\,e_t) = b$ pour tout $c$.
+Réciproquement, si $T x = b$, alors $x_s = b_s$ hors de $f$ et $t$, et $x_f = b_t$. Seule la
+coordonnée $x_t$ reste libre, et $x = R\,b + x_t\,e_t$.
+\end{proof}
+
+Le paramètre libre $c$ est l'information détruite par la prise. En marche arrière, chaque valeur
+possible de $c$ ouvre une branche.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/retro.pdf}
@@ -360,43 +558,58 @@ position qui répond vrai ou faux. La méthode procède en deux temps.
 en modifiant légèrement le plateau autour du roi visé, sans ajouter de pièce, et garde celles qui
 satisfont le prédicat.
 \item \textbf{Rencontre au milieu.} Le programme développe les coups légaux depuis la position
-actuelle. Depuis chaque but, il remonte d'un demi-coup grâce à la relation arrière. Une position
-atteinte des deux côtés fournit la suite de coups.
+actuelle. Depuis chaque but, il remonte d'un demi-coup grâce à la proposition~\ref{prop:arriere}.
+Une position atteinte des deux côtés fournit la suite de coups.
 \end{itemize}
 
 \begin{note}
 \textbf{À retenir.} Tout coup s'écrit $T = I - E_{ff} - E_{tt} + k\,E_{tf}$, avec un terme de
-plus pour la prise en passant et un second déplacement pour le roque. Une partie est un produit
-de telles matrices, qui tient dans deux plateaux d'étiquettes. Une prise détruit de l'information.
-Rangée dans un cimetière, elle rend toutes les matrices inversibles. Sinon, elle réapparaît en
-marche arrière sous forme de branches, ce qui permet d'imposer une condition finale.
+plus pour la prise en passant et un second déplacement pour le roque. Cette matrice se réduit à
+une ligne de six entiers et à cinq écritures. Une partie est un produit de telles matrices, qui
+tient dans deux tableaux d'étiquettes. Le noyau de $T$ est la case d'arrivée, donc une prise
+détruit de l'information. Rangée dans un cimetière, elle rend toutes les matrices inversibles.
+Sinon, elle réapparaît en marche arrière sous forme de branches.
 \end{note}
 
 \section{Le calcul par lots}
 
 \subsection{Empiler les plateaux}\label{th:lots}
-Nous rangeons $N$ plateaux dans un tableau de forme $(N, 65)$. La 65\textsuperscript{e} colonne,
-\code{NONE}, est une sentinelle qui vaut toujours zéro. Elle joue le rôle d'une case inexistante.
-Un coup sans prise en passant vide la case \code{NONE}, ce qui ne change rien, et aucun coup ne
-demande donc de traitement particulier. Un coup est une ligne de six entiers $(f, t, k, c, f',
-t')$. Appliquer $T$ à chaque plateau revient alors à une lecture groupée (\emph{gather}) suivie
-d'une écriture groupée (\emph{scatter}) :
-\[ b'_t = k\,b_f,\qquad b'_f = 0,\qquad b'_c = 0,\qquad b'_{t'} = b_{f'},\qquad b'_{f'} = 0. \]
-La matrice $64\times64$ n'est jamais construite.
+Nous rangeons $N$ plateaux dans un tableau de forme $(N, 65)$, sentinelle comprise, et $N$ coups
+dans un tableau de forme $(N, 6)$. D'après la proposition~\ref{prop:reduit}, appliquer un coup
+à chaque plateau revient à une lecture groupée (\emph{gather}) des valeurs $b_f$ et $b_{f'}$, puis
+à une écriture groupée (\emph{scatter}) sur les cases $t$, $t'$, $f$, $c$ et $f'$. Aucun
+branchement ne dépend du coup, et la matrice $64\times64$ n'est jamais construite.
 
 \subsection{Les 70 plans de coups}\label{th:plans}
 Pour produire tous les coups d'un lot, nous construisons un masque de forme $(N, 70, 64)$. Chaque
 plan $p$ correspond à un décalage fixe $\delta_p$. Dans ce plan, la case $f$ vaut vrai si la pièce
-posée en $f$ peut jouer ce décalage. Les 70 plans couvrent tous les coups possibles :
-\begin{itemize}
-\item 56 plans de rayons, soit 8 directions et 7 distances, pour la dame, la tour, le fou et le roi
-(distance 1) ;
-\item 8 plans de sauts de cavalier ;
-\item 4 plans de pions, pour l'avance simple, l'avance double et les deux prises ;
-\item 2 plans de roque.
-\end{itemize}
-Le décodage tient en une opération. La liste des indices non nuls du masque donne des couples
-(plan, case de départ), et la case d'arrivée vaut $t = f + \delta_p$.
+posée en $f$ peut jouer ce décalage. Les 70 plans couvrent tous les coups possibles.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{llll}
+\toprule
+Plans & Décalage & Pièces concernées & Origine\\
+\midrule
+0 à 27 & 4 diagonales, distances 1 à 7 & fou, dame, et roi à la distance 1 &
+proposition~\ref{prop:rayon}\\
+28 à 55 & 4 directions orthogonales, distances 1 à 7 & tour, dame, et roi à la distance 1 &
+proposition~\ref{prop:rayon}\\
+56 à 63 & 8 sauts & cavalier & proposition~\ref{prop:pas}\\
+64 à 67 & avance simple, avance double, 2 prises & pion & section~\ref{th:pion}\\
+68 et 69 & petit roque, grand roque & roi & section~\ref{th:echec}\\
+\bottomrule
+\end{tabular}
+\caption{Les 70 plans. Le plan d'un rayon de direction numéro $j$ et de distance $k$ a l'indice
+$7j + k - 1$.}
+\end{table}
+
+Les plans de rayons se calculent comme la propagation de la proposition~\ref{prop:rayon}, mais vus
+depuis la case de départ. Le masque « chemin encore libre » se met à jour à chaque distance par un
+décalage du masque des cases vides. Le décodage tient ensuite en une opération. La liste des
+indices non nuls du masque donne des triplets (plateau, plan, case de départ), et la case
+d'arrivée vaut $t = f + \delta_p$, où $\delta_p = 8 d_r + d_c$ est le décalage du plan exprimé en
+indices.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/plans.pdf}
@@ -406,23 +619,41 @@ chacun des 70 plans.}
 \end{figure}
 
 \subsection{Le test d'échec vu depuis le roi}\label{th:vueroi}
-Un coup pseudo-légal est légal si notre roi n'est pas en échec après le coup. Calculer les masques
-d'attaque de tout le camp adverse coûterait cher. Nous regardons plutôt depuis le roi. Nous lisons
-les cases de ses rayons, de ses sauts de cavalier et de son voisinage, ainsi que les deux cases
-d'où un pion pourrait l'attaquer. Si la première pièce rencontrée sur un rayon orthogonal est une
-dame ou une tour adverse, ou sur une diagonale une dame ou un fou adverse, le roi est en échec.
+Pour filtrer les coups pseudo-légaux, il faut tester l'échec sur chaque position candidate.
+Calculer le masque d'attaque de tout le camp adverse coûterait cher. Une symétrie permet de
+regarder seulement depuis le roi.
+
+\begin{proposition}[Symétrie de l'attaque]\label{prop:symetrie}
+Pour le cavalier, le roi, le fou, la tour et la dame, une pièce posée en $s$ attaque la case $r$
+si et seulement si une pièce de même sorte posée en $r$ attaquerait $s$. Pour le pion, la
+propriété vaut en inversant le sens d'avance.
+\end{proposition}
+\begin{proof}
+Les ensembles de pas du cavalier et du roi sont symétriques : si $d$ est un pas, $-d$ en est un.
+Pour une pièce glissante, les cases strictement comprises entre $s$ et $r$ sont les mêmes dans les
+deux sens, donc la condition « chemin libre » de la proposition~\ref{prop:rayon} aussi. Un pion
+attaque en diagonale vers l'avant. La case d'où il attaque $r$ se trouve donc en diagonale de $r$,
+dans le sens opposé.
+\end{proof}
+
+Le roi est donc en échec si, en partant de sa case, on rencontre un cavalier adverse à un saut de
+cavalier, un roi adverse sur une case voisine, un pion adverse sur l'une des deux cases
+diagonales situées devant lui, ou si la première pièce rencontrée sur un rayon est une dame ou une
+tour adverse (rayon orthogonal), une dame ou un fou adverse (diagonale). Les indices des cases à
+lire ne dépendent que de la case du roi. Ils sont calculés une fois pour toutes, et les indices
+hors du plateau pointent sur la sentinelle.
+
 \begin{figure}[H]
 \centering\includegraphics[width=.4\textwidth]{figs/vue_roi.pdf}
-\caption{Les cases lues pour un roi en e4. Les tables d'indices sont calculées une fois pour
-toutes, et les indices hors du plateau pointent sur la sentinelle.}
+\caption{Les cases lues pour un roi en e4.}
 \end{figure}
 
 \subsection{Les bitboards}\label{th:bitboard}
 Un masque de 64 cases tient dans un entier de 64 bits, où le bit $i$ correspond à la case $i$. Un
-décalage de masque devient un décalage de bits, et une opération logique case par case devient une
-opération logique sur un seul entier. Notre noyau CUDA utilise cette représentation. Chaque fil
-d'exécution y traite un parent. Il compte d'abord ses fils. Une somme préfixe attribue ensuite à
-chaque parent sa place dans le tableau de sortie, puis chaque fil écrit ses enfants.
+décalage de masque devient un décalage de bits de $8 d_r + d_c$ positions, suivi d'un masque de
+colonnes qui supprime les bits passés d'un bord à l'autre. Une opération logique case par case
+devient une opération logique sur un seul entier. Le noyau CUDA de la partie~III utilise cette
+représentation.
 
 \begin{note}
 \textbf{À retenir.} Les plateaux s'empilent dans un tableau $(N, 65)$. Un coup est une ligne de
@@ -431,6 +662,30 @@ passe tous les coups d'un lot, et le test d'échec lit un nombre fixe de cases a
 \end{note}
 
 \section{La recherche du meilleur coup}
+
+\subsection{L'évaluation : un produit scalaire}\label{th:eval}
+Pour comparer des positions, il faut un nombre. Notre évaluation additionne, pour chaque pièce, sa
+valeur de base et un bonus qui dépend de sa case. Les valeurs de base sont 100 pour le pion, 320
+pour le cavalier, 330 pour le fou, 500 pour la tour et 900 pour la dame, en centipions. Les bonus
+viennent de tables fixes, une par pièce, qui favorisent par exemple un cavalier au centre
+\cite{michniewski}. Rangeons le tout dans une table $E$ de 13 lignes, une par valeur possible
+d'une case, et 65 colonnes. L'évaluation du point de vue du camp $\varepsilon$ s'écrit
+\[ e(b) = \varepsilon \sum_{s=0}^{63} E[\,b_s + 6,\ s\,] = \varepsilon\,\langle X(b), E\rangle, \]
+où $X(b)$ est la matrice $13\times65$ qui vaut 1 en $(b_s + 6, s)$ et 0 ailleurs. C'est une
+lecture groupée dans $E$, suivie d'une somme par plateau. Les tables des noirs sont celles des
+blancs, retournées de haut en bas et changées de signe.
+
+\begin{figure}[H]
+\centering\includegraphics[width=.8\textwidth]{figs/evaluation.pdf}
+\caption{Les tables du pion et du cavalier blancs. Un pion gagne de la valeur en avançant, un
+cavalier en perd sur les bords.}
+\end{figure}
+
+Évaluer une position au milieu d'un échange de pièces donne un nombre trompeur. La
+\emph{quiescence} prolonge donc la recherche au-delà de la profondeur prévue, en ne jouant que des
+prises. À chaque nœud, le camp au trait peut aussi s'arrêter et garder l'évaluation de la
+position. Pour borner cet arbre, nous ne gardons que les prises où la pièce prise vaut au moins
+autant que celle qui prend, les promotions et les prises en passant, sur 4 demi-coups au plus.
 
 \subsection{Negamax et l'écriture (max, +)}\label{th:maxplus}
 Les blancs choisissent le coup qui maximise l'évaluation, les noirs celui qui la minimise. Prenons
@@ -442,11 +697,22 @@ point de vue du camp au trait, et
 
 Remplacez maintenant l'addition par le maximum, et la multiplication par l'addition. Vous obtenez
 le semi-anneau $(\max, +)$, dans lequel le produit d'une matrice par un vecteur s'écrit
-\[ (A\otimes x)_i = \max_j (A_{ij} + x_j). \]
-Posons $A_{ij}=0$ si $j$ est un fils de $i$, et $A_{ij}=-\infty$ sinon. Un niveau de negamax
-devient un produit matrice-vecteur, $v_{\text{parents}} = A \otimes (-v_{\text{fils}})$. La
-recherche en pleine largeur procède ainsi, niveau par niveau. Sa limite est la taille de l'arbre.
-Une position offre environ 35 coups, donc de l'ordre de $35^d$ feuilles à $d$ demi-coups.
+$(A\otimes x)_i = \max_j (A_{ij} + x_j)$.
+
+\begin{proposition}[Un niveau de negamax est un produit]\label{prop:maxplus}
+Soit $A$ la matrice dont le coefficient $(i, j)$ vaut 0 si le nœud $j$ est un fils du nœud $i$, et
+$-\infty$ sinon. Alors le vecteur des valeurs des parents est
+$v_{\text{parents}} = A \otimes (-v_{\text{fils}})$.
+\end{proposition}
+\begin{proof}
+$(A \otimes (-v))_i = \max_j (A_{ij} - v_j)$. Les termes où $j$ n'est pas un fils de $i$ valent
+$-\infty$ et ne comptent pas. Il reste $\max_{j \in \text{fils}(i)} (-v_j)$, qui est la
+définition du negamax.
+\end{proof}
+
+La recherche en pleine largeur procède ainsi, niveau par niveau. Sa limite est la taille de
+l'arbre. Une position offre environ 35 coups, donc de l'ordre de $35^d$ feuilles à $d$
+demi-coups.
 
 \subsection{L'alpha-bêta : ne pas lire ce qui ne change rien}\label{th:alphabeta}
 Parcourez l'arbre jouet de gauche à droite. Le premier fils vaut 3, donc les blancs sont sûrs
@@ -462,37 +728,59 @@ meilleure à la pire pour le camp qui choisit, il n'en lit que 5. La notation «
 une valeur connue seulement par une borne.}
 \end{figure}
 
-Formellement, chaque nœud reçoit une fenêtre $(\alpha, \beta)$. La borne $\alpha$ est ce que le
-camp au trait s'est déjà assuré ailleurs, $\beta$ ce que l'adversaire s'est déjà assuré. Dès qu'un
-fils atteint une valeur $\ge \beta$, les fils suivants ne servent plus. L'ordre des fils décide
-donc du nombre de coupures. Dans le meilleur cas, avec $b$ coups par position et une profondeur
-$d$, l'alpha-bêta lit $b^{\lceil d/2\rceil} + b^{\lfloor d/2\rfloor} - 1$ feuilles au lieu de
-$b^d$ \cite{knuth}. À temps égal, la profondeur atteignable double presque.
+Chaque nœud reçoit une fenêtre $(\alpha, \beta)$. La borne $\alpha$ est ce que le camp au trait
+s'est déjà assuré ailleurs, $\beta$ ce que l'adversaire s'est déjà assuré. Dès qu'un fils atteint
+une valeur $\ge \beta$, les fils suivants ne servent plus.
+
+\begin{proposition}[Ce que renvoie l'alpha-bêta]\label{prop:alphabeta}
+Notons $v^*(p)$ la valeur negamax exacte d'un nœud et $v$ la valeur renvoyée par l'alpha-bêta,
+dans sa variante \emph{fail-soft}, pour la fenêtre $(\alpha, \beta)$. Alors :
+\begin{itemize}
+\item si $\alpha < v < \beta$, $v = v^*(p)$ ;
+\item si $v \le \alpha$, $v^*(p) \le v$, et $v$ est une borne haute ;
+\item si $v \ge \beta$, $v^*(p) \ge v$, et $v$ est une borne basse.
+\end{itemize}
+Dans le meilleur ordre des fils, avec $b$ coups par position et une profondeur $d$, l'alpha-bêta
+lit $b^{\lceil d/2\rceil} + b^{\lfloor d/2\rfloor} - 1$ feuilles au lieu de $b^d$.
+\end{proposition}
+\noindent Ce résultat classique est dû à Knuth et Moore \cite{knuth}. À temps égal, la profondeur
+atteignable double presque. L'ordre des fils décide donc de l'efficacité, et les deux cas de
+borne ont une conséquence pratique à la racine. Un coup dont la valeur n'est qu'une borne haute
+n'a pas de score exact, et il ne faut pas le comparer aux autres comme s'il en avait un. La
+partie~V raconte le bogue que cette confusion a produit.
 
 \subsection{L'alpha-bêta comme convergence d'intervalles}\label{th:intervalles}
 Cette formulation relie l'alpha-bêta au calcul matriciel. Au lieu de calculer la valeur exacte de
 chaque nœud, nous tenons à jour un intervalle $[L, U]$ qui la contient. Au départ, nous savons
 seulement que l'évaluation est bornée. Chaque feuille lue resserre les intervalles de ses
-ancêtres, par les mêmes produits $(\max,+)$ appliqués d'un côté aux bornes basses et de l'autre
-aux bornes hautes.
-\begin{itemize}
-\item \textbf{La convergence est monotone et finie.} Les intervalles ne peuvent que rétrécir, et
-l'arbre est fini. Il ne s'agit pas d'une contraction au sens de Banach, qui garantirait une
-vitesse géométrique. C'est une itération de Kleene, qui atteint son point fixe en un nombre fini
-de pas.
-\item \textbf{Le critère de décision se lit à la racine.} Vous pouvez jouer le coup $a$ dès que
-$L(a) \ge \max_{b \ne a} U(b)$, car aucun autre coup ne peut plus le dépasser. Les valeurs exactes
-des autres coups sont alors inutiles.
-\end{itemize}
+ancêtres, par les produits de la proposition~\ref{prop:maxplus} appliqués d'un côté aux bornes
+basses et de l'autre aux bornes hautes.
+
+\begin{proposition}[Convergence et critère de décision]\label{prop:intervalles}
+Quand on lit les feuilles une à une, les intervalles $[L, U]$ de tous les nœuds décroissent pour
+l'inclusion, et ils se réduisent à la valeur exacte au bout d'un nombre fini de lectures. À la
+racine, le coup $a$ est un meilleur coup dès que
+\[ L(a) \ge \max_{b \ne a} U(b). \]
+\end{proposition}
+\begin{proof}
+Les opérations $\max$ et $x \mapsto -x$ sont monotones. Remplacer une borne d'une feuille par sa
+valeur exacte ne peut donc que relever les $L$ et abaisser les $U$ de ses ancêtres. L'arbre a un
+nombre fini de feuilles. Quand toutes sont lues, $L = U$ partout. Enfin, si
+$L(a) \ge U(b)$ pour tout autre coup $b$, alors $v^*(a) \ge L(a) \ge U(b) \ge v^*(b)$.
+\end{proof}
+
+Il ne s'agit pas d'une contraction au sens de Banach, qui garantirait une vitesse géométrique.
+C'est une itération monotone sur un ensemble fini, dite de Kleene, qui atteint son point fixe en
+un nombre fini de pas. Les valeurs exactes des autres coups sont inutiles une fois le critère
+atteint. L'alpha-bêta est la règle d'arrêt de cette convergence. Cette lecture permet de le
+paralléliser, puisque l'on peut lire les feuilles par paquets tant que le critère n'est pas
+atteint.
 
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/intervalles.pdf}
 \caption{Les intervalles des trois fils de la racine de l'arbre jouet, bornés au départ par
 $[0, 15]$, feuille après feuille, dans l'ordre de lecture de l'alpha-bêta.}
 \end{figure}
-
-L'alpha-bêta est la règle d'arrêt de cette convergence. Cette lecture permet de le paralléliser,
-puisque l'on peut lire les feuilles par paquets tant que le critère n'est pas atteint.
 
 \subsection{L'alpha-bêta par lots : le tri et les vagues}\label{th:vagues}
 Sur GPU, lire les fils un par un donnerait des lots trop petits, et la plupart des cœurs
@@ -512,24 +800,25 @@ $3\times10^7$, hybride sous $3\times10^9$, et 1-2-4 au-delà.}
 \end{figure}
 
 \begin{note}
-\textbf{À retenir.} Negamax est un produit matrice-vecteur dans $(\max, +)$. L'alpha-bêta est la
-règle d'arrêt d'une convergence d'intervalles $[L, U]$, monotone et finie. Sur GPU, le moteur lit
-les fils par vagues, triés par MVV/LVA, et retire les parents coupés après chaque vague. En
-théorie, cet élagage ne change jamais le résultat.
+\textbf{À retenir.} L'évaluation est un produit scalaire avec une table. Negamax est un produit
+matrice-vecteur dans $(\max, +)$. L'alpha-bêta est la règle d'arrêt d'une convergence
+d'intervalles $[L, U]$, monotone et finie. Sur GPU, le moteur lit les fils par vagues, triés par
+MVV/LVA, et retire les parents coupés après chaque vague. D'après la
+proposition~\ref{prop:alphabeta}, cet élagage ne change pas la valeur de la racine.
 \end{note}
 
 % =====================================================================================================
 \clearpage
 \part{Calculs préparatoires : la théorie vérifiée par le moteur}
 
-Cette partie ne contient aucune mesure de performance. Chaque calcul applique une formule de la
-partie~I à une position précise et donne le nombre obtenu par le moteur. Ces calculs tournent sur
-processeur et donnent le même résultat à chaque exécution. Ils servent à s'assurer que l'écriture
-matricielle est juste avant de mesurer quoi que ce soit.
+Cette partie ne contient aucune mesure de performance. Chaque calcul applique une formule ou une
+proposition de la partie~I à une position précise et donne le nombre obtenu par le moteur. Ces
+calculs tournent sur processeur et donnent le même résultat à chaque exécution. Ils servent à
+s'assurer que l'écriture matricielle est juste avant de mesurer quoi que ce soit.
 
 \section{Exemples chiffrés}
 
-\calcul{La position de départ en vecteur}{th:position}
+\calcul{La position de départ en vecteur}{la section~\ref{th:position}}
 \begin{python}
 from src.matrix_chess.engine import Game
 g = Game()                 # position de depart
@@ -539,13 +828,14 @@ Le moteur donne
 \[ \input{gen/vecteur}\unskip \]
 La première ligne de $B$, $(-4,-2,-3,-5,-6,-3,-2,-4)$, est bien la rangée~8 des noirs.
 
-\calcul{Le décalage comme produit de matrices}{th:decalage}
+\calcul{Le décalage comme produit de matrices}{la proposition~\ref{prop:decalage}}
 Le script compare $\shift(P, d_r, d_c)$ et $S_{d_r} P\, S_{d_c}^{\top}$ pour les 16 décalages
 utiles, soit les 8 directions du roi et les 8 sauts du cavalier. Les deux résultats sont égaux
 dans les 16 cas. Pour un pas vers le nord,
 \[ \input{gen/shiftS} \]
 La distance du roi obtenue par dilatations successives depuis e4 est égale, case par case, à
-$\max(|\Delta i|,|\Delta j|)$.
+$\max(|\Delta i|,|\Delta j|)$. Le noyau du roi de la proposition~\ref{prop:pas} est
+\[ \input{gen/noyau_roi}\unskip \]
 
 \begin{python}
 import numpy as np
@@ -554,7 +844,7 @@ P = np.zeros((8, 8), bool); P[4, 4] = True   # roi en e4
 masque = step_attacks(P, KING_DIRS)          # 8 cases a True
 \end{python}
 
-\calcul{L'échec et le mat sur le coup du berger}{th:echec}
+\calcul{L'échec et le mat sur le coup du berger}{la section~\ref{th:echec}}
 Après 1.e4 e5 2.Fc4 Cc6 3.Dh5 Cf6 4.Dxf7, le moteur calcule
 \[ \input{gen/echec}\unskip \]
 Le roi est attaqué, il n'a aucune case de fuite, et aucun coup légal ne pare l'échec.
@@ -564,22 +854,73 @@ Le roi est attaqué, il n'a aucune case de fuite, et aucun coup légal ne pare l
 produit, qui contient un seul 1, en e8.}
 \end{figure}
 
-\calcul{Cinq coups et leurs matrices}{th:speciaux}
-Pour chaque coup, nous comparons $T\,b$ à la position que le moteur obtient en jouant le coup. Les
-deux sont égales dans les cinq cas. Nous donnons la matrice restreinte aux cases $S$ qui
-changent.
+\calcul{Les six pièces, une par une}{le tableau de la section~\ref{th:catalogue} et les
+propositions~\ref{prop:coup} et~\ref{prop:reduit}}\label{ca:pieces}
+Pour chaque pièce, nous donnons quatre choses. Le masque $M$ de ses destinations, calculé par les
+formules de la partie~I. La matrice $T$ d'un de ses coups, restreinte aux cases $S$ qui changent,
+avec la matrice de retour $R$. La ligne de six entiers de la forme réduite et ses écritures. Le
+plan auquel le coup appartient parmi les 70. Dans les dix exemples de ce calcul et du suivant, le
+script vérifie que $T\,b$, la forme réduite et le moteur de référence donnent la même position.
 
 \begin{python}
-from src.matrix_chess.engine import Game, move_matrix
+from src.matrix_chess.engine import Game, move_matrix, piece_moves
+from src.matrix_chess import reduced
 g = Game()
-T = move_matrix(52, 36)            # e2 = 52, e4 = 36
-b1 = T @ g.board.reshape(64)       # b1[36] == 1, b1[52] == 0
+M = piece_moves(g.board, 6, 4)               # masque du pion e2 : e3 et e4
+T = move_matrix(52, 36)                      # e2 = 52, e4 = 36
+b1 = T @ g.board.reshape(64)                 # b1[36] == 1, b1[52] == 0
+m = reduced.pack([(52, 36, None, None, None)])       # ligne (52, 36, 1, 64, 64, 64)
+b2 = reduced.apply_moves(reduced.extend(g.board), m) # meme resultat, sans matrice
 \end{python}
 
-\medskip\noindent\textbf{Le coup simple e2-e4.}
+\medskip\noindent\textbf{Le pion : e2-e4.} La figure de la section~\ref{th:coup} montre ce coup.
 \input{gen/coup_pion}\unskip
 
-\medskip\noindent\textbf{La prise 2.exd5.}
+\medskip\noindent\textbf{Le cavalier : g1-f3.} Les sauts vers e2 et h3 sont possibles ou non
+selon que la case porte une pièce amie.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_cavalier.pdf}
+\caption{Le cavalier g1 depuis la position de départ. Le masque retire e2, occupée par un pion
+blanc.}
+\end{figure}
+\input{gen/coup_cavalier}\unskip
+
+\medskip\noindent\textbf{Le fou : c1-g5.} Après 1.d3 e6, la diagonale c1-h6 est ouverte.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_fou.pdf}
+\caption{Le fou c1. Le rayon vers le nord-est court jusqu'à h6. Vers le nord-ouest, il s'arrête
+tout de suite sur le pion b2. Les deux autres diagonales sortent du plateau.}
+\end{figure}
+\input{gen/coup_fou}\unskip
+
+\medskip\noindent\textbf{La tour : a1-a3.} Après 1.a4 a5, la colonne a est ouverte sur deux
+cases.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_tour.pdf}
+\caption{La tour a1. Le front s'arrête sur le pion blanc a4, que le filtrage retire. Vers l'est,
+il s'arrête tout de suite sur le cavalier b1.}
+\end{figure}
+\input{gen/coup_tour}\unskip
+
+\medskip\noindent\textbf{La dame : d1-h5.} Après 1.e4 e5, la diagonale d1-h5 est ouverte.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_dame.pdf}
+\caption{La dame d1 réunit les rayons du fou et de la tour. Seule la diagonale vers h5 est
+libre.}
+\end{figure}
+\input{gen/coup_dame}\unskip
+
+\medskip\noindent\textbf{Le roi : e1-e2.} Après 1.e4 e5, la case e2 est libre.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/coup_roi.pdf}
+\caption{Le roi e1. Sept de ses huit voisines sont hors du plateau ou occupées par ses propres
+pièces.}
+\end{figure}
+\input{gen/coup_roi}\unskip
+
+\calcul{Les quatre cas particuliers}{la section~\ref{th:speciaux} et le tableau de la
+section~\ref{th:reduit}}
+\medskip\noindent\textbf{La prise : 2.exd5.}
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/coup_prise.pdf}
 \caption{1.e4 d5 2.exd5. La matrice a la même forme que pour e2-e4. La ligne $t$ de $T$ efface le
@@ -587,14 +928,15 @@ pion noir de d5.}
 \end{figure}
 \input{gen/coup_prise}\unskip
 
-\medskip\noindent\textbf{La promotion a7xb8=D.}
+\medskip\noindent\textbf{La promotion : a7xb8=D.}
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/coup_promotion.pdf}
-\caption{Une promotion avec prise. Le coefficient bleu vaut 5.}
+\caption{Une promotion avec prise. Le coefficient bleu vaut 5, et la matrice de retour contient
+$\tfrac15$.}
 \end{figure}
 \input{gen/coup_promotion}\unskip
 
-\medskip\noindent\textbf{La prise en passant 3.exd6.}
+\medskip\noindent\textbf{La prise en passant : 3.exd6.}
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/coup_enpassant.pdf}
 \caption{1.e4 a6 2.e5 d5 3.exd6 e.p. Trois cases changent. La case e5 se vide, d6 reçoit le pion
@@ -602,14 +944,26 @@ blanc et d5 perd le pion noir.}
 \end{figure}
 \input{gen/coup_enpassant}\unskip
 
-\medskip\noindent\textbf{Le petit roque.}
+\medskip\noindent\textbf{Le petit roque.} Le masque $M$ du roi ne contient pas g1. Le roque n'est
+pas un pas du roi, et le moteur l'ajoute à part, après avoir vérifié ses conditions.
 \begin{figure}[H]
 \centering\includegraphics[width=\textwidth]{figs/coup_roque.pdf}
 \caption{Roi e1-g1 et tour h1-f1. La matrice a deux coefficients hors de la diagonale.}
 \end{figure}
 \input{gen/coup_roque}\unskip
 
-\calcul{Une partie de huit demi-coups}{th:partie}
+\calcul{Une pièce clouée : du pseudo-légal au légal}{la section~\ref{th:echec}}
+Le cavalier e2 est cloué par la tour e8. Ses coups sont pseudo-légaux, mais chacun d'eux découvre
+le roi. Nous jouons Cc3 par la matrice $T$, puis nous testons l'échec sur la position obtenue.
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/clouage.pdf}
+\caption{À gauche, les destinations pseudo-légales du cavalier. Au milieu, la position après Cc3
+et les cases attaquées par les noirs, en rouge. À droite, le produit du masque d'attaque par la
+case du roi vaut 1 en e1. Le coup est rejeté.}
+\end{figure}
+\input{gen/clouage}\unskip
+
+\calcul{Une partie de huit demi-coups}{la proposition~\ref{prop:partie}}
 Nous prenons la partie espagnole, variante d'échange, 1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fxc6 dxc6. Le
 script multiplie les huit matrices, compose en parallèle les étiquettes $(\mathrm{src},
 \mathrm{coef})$, et vérifie que les deux écritures donnent la même matrice $G$ et la même
@@ -631,7 +985,8 @@ de la case initiale e2. « 0 » marque une case vidée. En c6, l'étiquette « �
 a pris le fou, lui-même venu de f1. La colonne f1 de $G$ est donc nulle.}
 \end{figure}
 
-\calcul{Le cimetière et les prédécesseurs}{th:retour}
+\calcul{Le cimetière et les prédécesseurs}{les propositions~\ref{prop:cimetiere}
+et~\ref{prop:arriere}}
 \textbf{Le cimetière.} Pour la prise e4xd5, restreinte aux trois cases e4, d5 et à la première
 case du cimetière, le moteur donne
 \[ \input{gen/cimetiere}\unskip \]
@@ -646,7 +1001,7 @@ cases) du cimetière (30 cases). La pièce prise n'est plus effacée, elle est r
 vient d'arriver en e5, \input{gen/retro}\unskip{} Le script rejoue le coup depuis chacun de ces
 six prédécesseurs et retrouve la position d'arrivée.
 
-\calcul{Le mat de Philidor retrouvé}{th:impose}
+\calcul{Le mat de Philidor retrouvé}{la section~\ref{th:impose}}
 \begin{python}
 from src.matrix_chess.impose import impose
 from src.matrix_chess.retro import is_smothered_mate
@@ -661,7 +1016,7 @@ la défendre en g8, et le cavalier donne mat en f7.
 puis reliée à la position de départ.}
 \end{figure}
 
-\calcul{Un lot de quatre fils}{th:lots}
+\calcul{Un lot de quatre fils}{la section~\ref{th:lots}}
 Depuis la position de départ, nous appliquons quatre coups d'un seul appel. Les coups s'écrivent
 \[ \input{gen/lots}\unskip \]
 où 64 désigne la sentinelle. Les quatre fils sont identiques aux positions obtenues en jouant
@@ -672,7 +1027,8 @@ chaque coup séparément.
 sentinelle). Deux cellules seulement changent dans chaque fils (encadrés orange).}
 \end{figure}
 
-\calcul{Le décodage des plans et les lectures du roi}{th:plans}
+\calcul{Le décodage des plans et les lectures du roi}{la section~\ref{th:plans} et la
+proposition~\ref{prop:symetrie}}
 Dans la position de la section~\ref{th:plans}, le masque contient
 \input{gen/plans_total}\unskip. Voici cinq couples (plan, case de départ) et le coup décodé.
 \begin{center}\small\input{gen/plans_decode}\unskip\end{center}
@@ -680,14 +1036,22 @@ Dans la position de la section~\ref{th:plans}, le masque contient
 entier de 64 bits, et leur avance d'une case comme un décalage de 8 bits :
 \[ \input{gen/bitboard}\unskip \]
 
-\calcul{L'arbre jouet en (max, +)}{th:maxplus}
+\calcul{L'évaluation de trois positions}{la section~\ref{th:eval}}
+Le script calcule l'évaluation de deux façons, par la lecture groupée du moteur et par le produit
+scalaire $\langle X(b), E\rangle$ avec la matrice $X(b)$ construite explicitement. Les deux
+donnent le même nombre. Du point de vue des blancs,
+\[ \input{gen/evaluation}\unskip \]
+La position de départ est symétrique et vaut 0. Après 1.e4, le pion quitte une case à $-20$ pour
+une case à $+20$. Après 2.exd5, les blancs ont un pion de plus.
+
+\calcul{L'arbre jouet en (max, +)}{la proposition~\ref{prop:maxplus}}
 Les feuilles de l'arbre jouet valent 3, 12, 8, puis 2, 4, 6, puis 14, 5, 2. Avec
 \[ \input{gen/maxplus_A} \]
 le calcul donne
 \[ \begin{gathered}\input{gen/maxplus}\unskip\end{gathered} \]
 La racine vaut 3, comme par le minimax direct.
 
-\calcul{Le critère de décision et l'alpha-bêta}{th:intervalles}
+\calcul{Le critère de décision et l'alpha-bêta}{la proposition~\ref{prop:intervalles}}
 Sur l'arbre jouet, le critère $L_1 \ge \max(U_2, U_3)$ est atteint après
 \input{gen/decision}\unskip. L'alpha-bêta lit le même nombre de feuilles dans les deux cas. Le
 critère d'intervalles et l'alpha-bêta s'arrêtent donc au même moment.
@@ -742,6 +1106,295 @@ théorie. Sur de grands ensembles de positions, le moteur produit les mêmes cou
 \code{python-chess}, les mêmes nombres de positions que les valeurs publiées, et l'alpha-bêta par
 lots donne le même score et un coup de même valeur que la pleine largeur. L'écriture matricielle
 est donc juste. Reste à savoir ce qu'elle vaut en vitesse et en force de jeu.
+\end{note}
+
+% =====================================================================================================
+% =====================================================================================================
+\clearpage
+\part{Architecture du code et noyaux}
+
+Cette partie décrit le code tel qu'il est dans le dépôt, sous \code{src/matrix\_chess/}. Elle dit
+où chaque proposition de la partie~I est appliquée, et comment le même calcul est écrit trois
+fois, de la forme la plus lisible à la forme la plus rapide.
+
+\section{Les modules}
+
+Le moteur compte \input{gen/lignes_total}\unskip~lignes de Python hors tests et démonstrations,
+réparties en 14 modules. Tous dépendent de \code{engine.py}, qui sert de référence.
+
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/architecture.pdf}
+\caption{Les modules et leurs dépendances. Une flèche va d'un module vers celui qu'il importe. Les
+dépendances vers \code{engine.py}, communes à tous, et vers \code{validate.py}, qui convertit les
+positions de \code{python-chess}, ne sont pas tracées.}
+\end{figure}
+
+\begin{table}[H]
+\centering\small
+\input{gen/modules}\unskip
+\caption{Les 14 modules du moteur, dans l'ordre des couches. Les nombres de lignes sont comptés
+par le script.}
+\end{table}
+
+Les modules se rangent en quatre groupes.
+\begin{itemize}
+\item \textbf{La référence.} \code{engine.py} écrit les règles comme dans la partie~I, en
+\code{numpy}, avec les matrices $64\times64$ complètes. Il est lent et sert de vérité pour tous
+les tests.
+\item \textbf{Le chemin rapide.} \code{reduced.py}, \code{reduced\_gpu.py}, \code{gpu\_engine.py}
+et \code{gpu\_kernels.py} réécrivent le même calcul par lots, jusqu'au noyau CUDA.
+\item \textbf{La marche arrière.} \code{retro.py}, \code{impose.py} et
+\code{invert\_full\_game.py} appliquent les propositions~\ref{prop:cimetiere}
+et~\ref{prop:arriere}. Ils tournent sur processeur.
+\item \textbf{Les outils de mesure.} \code{validate.py}, \code{bench\_gpu.py}, \code{match.py},
+\code{duel.py} et \code{analyse.py} produisent les résultats de la partie~IV.
+\end{itemize}
+
+\section{Trois écritures du même coup}
+
+Le même coup existe sous trois formes dans le code. Chacune est testée contre la précédente.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{3.9cm}>{\raggedright\arraybackslash}p{3.9cm}>{\raggedright\arraybackslash}p{3.9cm}}
+\toprule
+ & Dense & Réduite & Noyau\\
+\midrule
+Module & \code{engine.py} & \code{reduced.py}, \code{reduced\_gpu.py} & \code{gpu\_kernels.py}\\
+Plateau & vecteur de 64 entiers & ligne de 65 octets, sentinelle comprise & 12 entiers de 64
+bits, un par sorte de pièce et par camp\\
+Coup & matrice $64\times64$, 4\,096 coefficients & ligne de 6 entiers & code de 64 bits\\
+Application & produit $T\,b$ & une lecture et une écriture groupées & 5 écritures d'octet\\
+Légalité & test d'échec sur chaque candidat, par masques d'attaque & test d'échec sur chaque
+candidat, vu depuis le roi & directe, par clouages et masque de parade\\
+Fondement & proposition~\ref{prop:coup} & proposition~\ref{prop:reduit} &
+propositions~\ref{prop:reduit} et~\ref{prop:symetrie}\\
+Rôle & référence et tests & pont vers le GPU, repli sur processeur & production sur GPU\\
+\bottomrule
+\end{tabular}
+\caption{Les trois écritures d'un coup. Les tests comparent la forme réduite à la forme dense,
+et le noyau à la forme réduite.}
+\end{table}
+
+\section{La génération par lots en PyTorch}
+
+La fonction \code{expand} prend un lot de positions et renvoie tous leurs fils légaux. Sa version
+de référence, \code{expand\_torch}, enchaîne quatre étapes. En voici une version simplifiée.
+
+\begin{python}
+def expand_torch(B, cr, ep, color):
+    masque = pseudo_planes(B, cr, ep, color)           # (N, 70, 64)
+    n, m, double = decode(masque, B, ep, color)        # parents (M), coups (M, 6)
+    fils, ok, ccr, cep = _children(B[n], cr[n], roi[n], m, double, color)
+    return n[ok], m[ok], fils[ok], ccr[ok], cep[ok]    # coups legaux seulement
+\end{python}
+
+\begin{itemize}
+\item \textbf{\code{pseudo\_planes}} construit les 70 plans de la section~\ref{th:plans} par des
+décalages, pour tout le lot.
+\item \textbf{\code{decode}} extrait les indices non nuls du masque et calcule $t = f +
+\delta_p$. Une promotion donne quatre lignes, une par pièce de promotion.
+\item \textbf{\code{\_children}} applique les coups par la forme réduite, teste l'échec depuis le
+roi, et met à jour les droits de roque et la case de prise en passant.
+\item \textbf{Le filtrage} ne garde que les lignes où le roi n'est pas en échec.
+\end{itemize}
+
+\textbf{Exemple.} Sur un lot réel, les 29 positions obtenues après 1.e4 e5 et un coup blanc, les
+tableaux ont les formes suivantes.
+\begin{center}\small\input{gen/pipeline}\unskip\end{center}
+
+\textbf{Compilation.} Sur GPU, \code{torch.compile} fusionne en noyaux les opérations
+élémentaires de quatre fonctions, \code{pseudo\_planes}, \code{in\_check}, \code{\_pack} et
+\code{\_children}, avec des formes dynamiques. Un appel d'échauffement compile les deux camps avant que la pendule ne tourne.
+
+\textbf{Mémoire.} Les lots sont découpés en morceaux d'au plus 400\,000 parents sur GPU et
+20\,000 sur processeur. Le perft et la recherche descendent en profondeur morceau par morceau. Ils
+ne gardent en mémoire qu'un morceau et ses fils par niveau, jamais l'arbre entier. La profondeur
+n'est donc limitée que par le temps.
+
+\section{Le noyau CUDA fusionné}
+
+Le chemin PyTorch crée tous les candidats pseudo-légaux, puis en jette une partie. Le noyau de
+\code{gpu\_kernels.py} produit directement les coups légaux, sans créer de candidat. Il donne le
+même résultat, dans le même ordre, environ dix fois plus vite d'après les mesures de
+l'incrément~1. Il est écrit en C pour CUDA, dans une chaîne de caractères que CuPy compile à la
+volée. Sans CuPy, le moteur garde le chemin PyTorch sans rien signaler.
+
+\subsection{Un fil d'exécution par position}
+Le noyau \code{moves} lance un fil par position parente, par blocs de 128 fils. Chaque fil fait
+cinq choses.
+
+\textbf{1. Construire les bitboards.} Le fil lit les 64 cases de son plateau et remplit 12
+entiers de 64 bits, \code{own[1..6]} pour les pièces du camp au trait et \code{en[1..6]} pour
+celles de l'adversaire. Le décalage de la proposition~\ref{prop:decalage} devient
+\begin{python}
+U sh(U x, int dr, int dc) {     // bit s -> bit s + 8*dr + dc
+    U cols = (dc >= 0 ? (0xFF << dc) & 0xFF : 0xFF >> -dc) * 0x0101010101010101;
+    int s = 8 * dr + dc;
+    return (s >= 0 ? x << s : x >> -s) & cols;
+}
+\end{python}
+Le masque \code{cols} supprime les bits qui auraient changé de ligne en sortant par un bord.
+
+\textbf{2. Calculer les cases attaquées.} Le fil propage les rayons adverses comme dans la
+proposition~\ref{prop:rayon}, en retirant notre roi de l'occupation. Sans cela, le roi pourrait
+reculer le long du rayon qui l'attaque et se croire à l'abri derrière sa propre case.
+
+\textbf{3. Trouver les échecs et les clouages.} Depuis le roi, le fil suit les huit directions.
+Si la première pièce rencontrée est une pièce glissante adverse du bon type, c'est un échec. Si
+c'est une pièce amie et que la suivante est une pièce glissante adverse, la pièce amie est
+clouée, et le fil note sur lequel des quatre axes. C'est la proposition~\ref{prop:symetrie}
+appliquée deux fois.
+
+\textbf{4. Former le masque de parade.} Sans échec, toutes les cases d'arrivée sont permises.
+Avec un seul échec, seules le sont la case de la pièce qui donne échec et les cases entre elle et
+le roi. Avec deux échecs, aucune ne l'est, et seul le roi peut jouer.
+
+\textbf{5. Produire les plans.} Pour chacun des 70 plans, le fil calcule par décalages le masque
+des cases de départ, déjà légal. Une pièce clouée ne compte que dans les plans de son axe. Le roi
+ne va que sur une case non attaquée. La prise en passant, rare, est le seul coup que le fil joue
+puis vérifie.
+
+\subsection{Trois passes pour ranger les fils}
+Chaque parent a un nombre de fils différent, et les fils doivent tous écrire dans un seul tableau,
+sans se gêner. Le noyau procède en trois passes.
+
+\begin{itemize}
+\item \textbf{Passe 1, compter.} Chaque fil additionne le nombre de bits de ses 70 masques. Une
+promotion compte pour quatre. Aucun coup n'est écrit.
+\item \textbf{Passe 2, placer.} Une somme cumulée des compteurs, faite par PyTorch, donne à
+chaque parent le rang de son premier fils dans le tableau de sortie.
+\item \textbf{Passe 3, écrire.} Le noyau \code{moves} repasse sur chaque parent et écrit un code
+par coup, à partir de son rang.
+\end{itemize}
+
+\begin{figure}[H]
+\centering\includegraphics[width=\textwidth]{figs/passes.pdf}
+\caption{Les trois passes sur le lot de l'exemple précédent, calculées ici par le chemin PyTorch,
+qui donne les mêmes nombres. En haut, le compteur de chaque parent. En bas, la place de chaque
+parent dans le tableau des fils.}
+\end{figure}
+\noindent Sur ce lot, il y a \input{gen/passes}\unskip.
+
+Pour le dernier niveau d'un perft, la passe 1 suffit. Le noyau compte les feuilles sans jamais
+créer leurs positions, ce qui explique une bonne part du débit de la partie~IV.
+
+\subsection{Le code d'un coup et l'écriture des fils}
+Entre la passe 3 et la création des fils, chaque coup voyage sous la forme d'un seul entier de 64
+bits.
+
+\begin{figure}[H]
+\centering\includegraphics[width=.9\textwidth]{figs/code_coup.pdf}
+\caption{Les champs du code d'un coup, des bits de poids faible aux bits de poids fort. Le dessin
+n'est pas à l'échelle pour l'indice du parent, qui occupe les bits 18 à 63.}
+\end{figure}
+\noindent Par exemple, le coup e2-e4 du parent numéro 3 a pour code
+\[ \input{gen/code_coup}\unskip \]
+
+Un second noyau, \code{children}, lance un fil par fils. Il décode le coup, en déduit la ligne
+$(f, t, k, c, f', t')$, et applique les cinq écritures de la proposition~\ref{prop:reduit}. Le
+plateau de 65 octets est lu et écrit par mots de 64 bits. Le fil calcule aussi les droits de
+roque restants, d'après les cases de départ et d'arrivée, et la case de prise en passant, qui est
+le milieu de $f$ et $t$ après une avance double.
+
+\textbf{Vérification.} Un test compare le noyau au chemin PyTorch sur les positions de 300
+parties aléatoires et sur des cas rares de prise en passant, pour la recherche normale et pour la
+quiescence. Les fils doivent être identiques, dans le même ordre. Ce test demande un GPU. Nous ne
+l'avons pas relancé pour ce rapport.
+
+\section{La recherche : le \code{Searcher}}
+
+La classe \code{Searcher} choisit un coup dans un temps donné. Elle a trois niveaux.
+
+\begin{python}
+search(position, budget):
+    fils = expand(position)                    # les coups de la racine
+    pour profondeur = 1, 2, 3, ... :
+        si la profondeur suivante est prevue trop longue : arret
+        scores = root_scores(fils, profondeur) # groupes de 1, 1, 2, 4, 8 coups
+    jouer le coup de meilleur score
+
+value(lot, alpha, beta, restant):              # valeurs negamax de tout un lot
+    si restant == 0 : quiescence (evaluation, puis prises seulement)
+    pour chaque morceau de parents non encore coupes :
+        fils = expand(morceau)
+        trier les fils de chaque parent        # un seul tri pour tout le lot
+        pour chaque vague de rangs :
+            garder les fils dont le parent n'est pas coupe
+            v = value(fils, -beta, -max(alpha, meilleur), restant - 1)
+            meilleur[parent] = max(meilleur[parent], -v)
+    un parent sans coup legal vaut -MAT s'il est en echec, 0 sinon
+\end{python}
+
+\textbf{Des fenêtres par position.} Les bornes $\alpha$ et $\beta$ sont des vecteurs, avec une
+valeur par position du lot. La mise à jour du meilleur score de chaque parent est un maximum par
+groupe, fait en une opération. C'est le produit $(\max, +)$ de la
+proposition~\ref{prop:maxplus}, restreint aux fils de la vague.
+
+\textbf{Un seul tri.} Chaque fils reçoit une clé entière. Le moteur trie tout le lot une seule
+fois sur la paire (parent, clé), ce qui regroupe les fils par parent et les range du plus
+prometteur au moins prometteur. La clé place d'abord les prises et les promotions, de la plus
+grosse victime prise par le plus petit attaquant à l'inverse, puis les coups calmes, par
+évaluation statique. Une variante ajoute les coups calmes qui ont déjà provoqué des coupures.
+
+\textbf{Les vagues.} Le rang d'un fils chez son parent décide de sa vague, comme dans la
+section~\ref{th:vagues}. Le mode adaptatif estime la taille du sous-arbre du lot à partir du
+nombre de fils par parent et de la profondeur restante, puis choisit le découpage.
+
+\textbf{La racine.} Les coups de la racine sont cherchés par groupes de 1, 1, 2, 4 puis 8, le
+meilleur de l'itération précédente en premier. Le premier est cherché avec une fenêtre complète.
+Les suivants le sont avec une fenêtre qui s'arrête au meilleur score déjà connu. D'après la
+proposition~\ref{prop:alphabeta}, un coup qui ne dépasse pas ce score ne renvoie qu'une borne
+haute. Le code la place strictement sous le meilleur score, pour que le coup ne soit jamais
+choisi.
+
+\textbf{La pendule.} Avant chaque profondeur, le moteur prévoit sa durée à partir des deux
+précédentes. Si elle dépasse 1,5 fois le budget, il s'arrête. Si une profondeur dépasse quand
+même cette limite, elle est interrompue, et le moteur joue le meilleur coup parmi les groupes
+terminés. Ce choix est sûr dès que le premier groupe a fini.
+
+\textbf{La répétition.} Chaque position jouée laisse une clé, formée du plateau, des droits de
+roque et du trait. Un coup de la racine qui ramène à une position déjà vue n'est pas cherché et
+vaut 0. Le moteur l'évite donc quand il mène et le choisit quand il est perdu.
+
+\textbf{Les compteurs.} Pour chaque demi-coup de profondeur, le \code{Searcher} compte les
+parents développés, les parents coupés, et ceux que le premier fils a suffi à couper. Ce taux de
+coupure de la première vague mesure la qualité du tri.
+
+\section{Les outils de mesure}
+
+\textbf{\code{validate.py}} joue des parties aléatoires en parallèle avec \code{python-chess} et
+compare, à chaque position, les coups légaux, le mat, le pat et les nulles.
+
+\textbf{\code{bench\_gpu.py}} lance le perft sur GPU et la commande \code{go perft} de Stockfish
+sur les mêmes positions.
+
+\textbf{\code{match.py}} joue contre Stockfish avec une vraie pendule. Deux réglages reproduisent
+des conditions de référence. Le réglage \code{uci-elo} donne à Stockfish 60~s + 0,6~s par coup,
+1 thread et 16~Mo de table. Le réglage \code{machine} lui donne tous les cœurs sauf deux et 8~Go
+de table. Chaque coup est journalisé avec sa profondeur, ses nœuds et son temps.
+
+\textbf{\code{analyse.py}} fait évaluer chaque coup par Stockfish, avec les formules de Lichess
+\cite{lichess}. Une évaluation de $x$ centipions devient un pourcentage de gain
+\[ W(x) = 50 + 50\left(\frac{2}{1 + e^{-0{,}00368208\,x}} - 1\right), \]
+avec $x$ borné à $\pm1000$. La perte d'un coup est la baisse $\Delta W$ qu'il cause. Un coup est
+une imprécision à partir de 5 points, une erreur à partir de 10 et une gaffe à partir de 15. La
+précision d'un coup vaut $103{,}17\,e^{-0{,}04354\,\Delta W} - 2{,}17$, bornée entre 0 et 100.
+
+\textbf{\code{duel.py}} oppose deux réglages du moteur. Chaque ouverture, tirée au hasard et
+jugée équilibrée par Stockfish, est jouée deux fois avec les couleurs inversées. Si $p$ est le
+score moyen du candidat et $\sigma$ l'écart-type du score par partie sur $n$ parties, l'écart
+d'Elo et son intervalle à 95~\% sont
+\[ \Delta(p) = -400 \log_{10}\!\left(\frac1p - 1\right),\qquad
+\left[\Delta\!\left(p - 1{,}96\,\tfrac{\sigma}{\sqrt n}\right) ;\
+\Delta\!\left(p + 1{,}96\,\tfrac{\sigma}{\sqrt n}\right)\right]. \]
+
+\begin{note}
+\textbf{À retenir.} Le code écrit le même coup trois fois : en matrice dense pour la référence,
+en six entiers pour les lots, en bitboards pour le noyau CUDA. Chaque forme est testée contre la
+précédente. Le noyau produit directement les coups légaux, un fil par position, et range les fils
+en trois passes. La recherche traite des lots entiers, avec une fenêtre par position, un seul tri
+et des vagues.
 \end{note}
 
 % =====================================================================================================
@@ -843,7 +1496,21 @@ l'incrément 1.}
 \end{figure}
 
 \subsection{La comparaison des deux incréments}
-Le tri MVV/LVA ramène une recherche en profondeur 6 sur le gambit Dame de 21~s à 1,1~s. Dans le
+Le tableau suivant donne le temps d'une recherche en profondeur 6, sur cinq positions, selon le
+découpage en vagues et le tri. Le tri MVV/LVA ramène la position du gambit Dame de 21~s à 1,1~s.
+\begin{table}[H]
+\centering\small\input{gen/tab_recherche}\unskip
+\caption{Temps d'une recherche en profondeur 6 sur RTX PRO 6000 (incrément 2).}
+\end{table}
+
+Le filtre de qualité mesure ensuite la perte des coups choisis sur 100 positions, à 1~s par coup.
+\begin{table}[H]
+\centering\small\input{gen/tab_filtres}\unskip
+\caption{Filtre de qualité sur 100 positions (incrément 2). La perte est l'écart avec le meilleur
+coup selon Stockfish.}
+\end{table}
+
+Dans le
 duel, le moteur de l'incrément 2 marque \input{gen/duel}\unskip{} contre celui de l'incrément 1.
 \begin{figure}[H]
 \centering\includegraphics[width=.8\textwidth]{figs/exp_duel.pdf}
@@ -965,6 +1632,8 @@ par un duel apparié.
 \emph{Artificial Intelligence}, vol. 6, n° 4, 1975.
 \bibitem{ybw} R. Feldmann, \emph{Game Tree Search on Massively Parallel Systems}, thèse,
 université de Paderborn, 1993.
+\bibitem{michniewski} T. Michniewski, « Simplified Evaluation Function », Chess Programming Wiki,
+chessprogramming.org.
 \bibitem{perft} Chess Programming Wiki, page « Perft Results », chessprogramming.org.
 \bibitem{lichess} Lichess, page « Accuracy », lichess.org/page/accuracy.
 \bibitem{inc1} Projet \code{chess-gpu}, \emph{Incrément 1 : moteur matriciel sur GPU},
@@ -1033,8 +1702,8 @@ cd docs/etudes/2026-11-25_synthese && latexmk -pdf synthese.tex
 python -m unittest src.matrix_chess.test_engine src.matrix_chess.test_retro
 python -m unittest src.matrix_chess.test_gpu_engine
 \end{python}
-Le script calcule les figures et toutes les valeurs de la partie~II depuis le moteur. Dans la
-partie~III, il recalcule le duel et trace les données figées des incréments. Une seule courbe
+Le script calcule les figures et toutes les valeurs des parties~II et~III depuis le moteur. Dans la
+partie~IV, il recalcule le duel et trace les données figées des incréments. Une seule courbe
 reprend des valeurs publiées ailleurs, la perte par profondeur, tirée du rapport de l'incrément 1
 \cite{inc1}. La théorie de référence du dépôt se trouve dans \cite{theorie}.
 

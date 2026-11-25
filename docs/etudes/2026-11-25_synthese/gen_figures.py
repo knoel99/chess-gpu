@@ -316,13 +316,30 @@ def echec():
 
 # ----------------------------------------------------------------------------------------------- partie III
 
-COUPS = [  # (clé, coups avant, coup étudié)
+COUPS = [  # (clé, coups avant, coup étudié) : les six pièces, puis les quatre cas particuliers
     ("pion", [], "e2e4"),
+    ("cavalier", [], "g1f3"),
+    ("fou", ["d2d3", "e7e6"], "c1g5"),
+    ("tour", ["a2a4", "a7a5"], "a1a3"),
+    ("dame", ["e2e4", "e7e5"], "d1h5"),
+    ("roi", ["e2e4", "e7e5"], "e1e2"),
     ("prise", ["e2e4", "d7d5"], "e4d5"),
-    ("roque", ["g1f3", "g8f6", "e2e4", "e7e5", "f1c4", "f8c5"], "e1g1"),
     ("promotion", ["a2a4", "b7b5", "a4b5", "a7a6", "b5a6", "g8f6", "a6a7", "h7h6"], "a7b8q"),
     ("enpassant", ["e2e4", "a7a6", "e4e5", "d7d5"], "e5d6"),
+    ("roque", ["g1f3", "g8f6", "e2e4", "e7e5", "f1c4", "f8c5"], "e1g1"),
 ]
+PLANS_NOMS = ([f"{d}{k}" for d in ("NO", "NE", "SO", "SE", "N", "S", "O", "E") for k in range(1, 8)]
+              + [f"C{k}" for k in range(1, 9)] + ["P1", "P2", "PxO", "PxE", "O-O", "O-O-O"])
+
+
+def plan_de(f, t, kind, color, also):
+    """Indice du plan (parmi 70) auquel appartient le coup f -> t."""
+    d = (t // 8 - f // 8, t % 8 - f % 8)
+    if also is not None:
+        return 68 if d[1] == 2 else 69
+    offs = ge.plane_offsets(color)
+    rng = range(64, 68) if kind == 1 else range(56, 64) if kind == 2 else range(56)
+    return next(p for p in rng if offs[p] == d)
 
 
 def coup(key, before, uci):
@@ -335,25 +352,48 @@ def coup(key, before, uci):
     after = T @ flat
     h = play(uci, g=play(*before))
     assert np.array_equal(after.reshape(8, 8), h.board)
+    m6 = reduced.pack([mv])
+    assert np.array_equal(reduced.apply_moves(reduced.extend(b), m6)[0, :64], after)  # forme réduite = T b
     R = reverse_matrix(T)
     Sq = sorted({f, t} | ({ec} if ec is not None else set()) | set(also or ()))
-    fig, ax = plt.subplots(1, 3, figsize=(10.5, 3.4), gridspec_kw=dict(width_ratios=[1, 1, 1.15]))
-    board(ax[0], b, "Avant : $B$", mask=piece_moves(b, f // 8, f % 8, g.ep_square), arrow=(f, t))
-    board(ax[1], after.reshape(8, 8), "Après : $B' = \\mathrm{mat}(T\\,b)$")
-    big(ax[2], T, Sq, "$T\\in\\mathbb{Z}^{64\\times64}$")
+    M = piece_moves(b, f // 8, f % 8, g.ep_square)
+    fig, ax = plt.subplots(1, 4, figsize=(12.5, 3.3), gridspec_kw=dict(width_ratios=[1, .95, 1, 1.1]))
+    board(ax[0], b, "Avant : $B$ et masque", mask=M, arrow=(f, t), size=14)
+    grid(ax[1], M.astype(int), "Masque $M$ de la pièce", hi=ones(C[0] + "55"), size=6)
+    board(ax[2], after.reshape(8, 8), "Après : $B' = \\mathrm{mat}(T\\,b)$", size=14)
+    big(ax[3], T, Sq, "$T\\in\\mathbb{Z}^{64\\times64}$")
     save(fig, "coup_" + key)
     names = [name(i) for i in Sq]
     rb = (R @ after)[Sq]
     ret = ("$R$ rend $b_S$ sans perte" if np.array_equal(rb, flat[Sq])
            else "$R$ ne rend pas la pièce prise, dont la valeur est perdue")
     fn = (lambda x: str(int(x)) if float(x).is_integer() else f"\\tfrac{{1}}{{{int(round(1 / x))}}}")
+    k = promo or 1
+    ecr = [f"b'_{{{t}}} = {'' if k == 1 else str(k) + chr(92) + 'cdot '}b_{{{f}}}", f"b'_{{{f}}} = 0"]
+    if ec is not None:
+        ecr.append(f"b'_{{{ec}}} = 0")
+    if also is not None:
+        ecr += [f"b'_{{{also[1]}}} = b_{{{also[0]}}}", f"b'_{{{also[0]}}} = 0"]
+    p = plan_de(f, t, abs(int(flat[f])), g.turn, also)
+    delta = t - f
+    n_dest = int(M.sum())
+    legaux = sum(1 for x in g.legal_moves() if x[0] == f)
     write("coup_" + key,
           f"\\[ S = ({', '.join(f'{n}={i}' for n, i in zip(names, Sq))}),\\quad "
           f"T_S = {pm(T[np.ix_(Sq, Sq)])},\\quad b_S = {pm(flat[Sq].reshape(-1, 1))}"
-          f"\\;\\longmapsto\\; (Tb)_S = {pm(after[Sq].reshape(-1, 1))} \\]\n"
-          f"\\[ R_S = {pm(R[np.ix_(Sq, Sq)], fn)},\\qquad (R\\,b')_S = {pm(rb.reshape(-1, 1))}"
-          f" \\]\n"
-          f"Ici, {ret}. La matrice $T$ est de rang {np.linalg.matrix_rank(T.astype(float))} sur 64.")
+          f"\\;\\longmapsto\\; (Tb)_S ={pm(after[Sq].reshape(-1, 1))} \\]\n"
+          f"\\[ R_S = {pm(R[np.ix_(Sq, Sq)], fn)},\\qquad (R\\,b')_S = {pm(rb.reshape(-1, 1))} \\]\n"
+          f"\\begin{{itemize}}\n"
+          f"\\item \\textbf{{Coups de la pièce.}} Le masque $M$ contient {n_dest} destination"
+          f"{'s' if n_dest > 1 else ''}, et la pièce a {legaux} coup{'s' if legaux > 1 else ''} "
+          f"léga{'ux' if legaux > 1 else 'l'} dans cette position.\n"
+          f"\\item \\textbf{{Matrice.}} Ici, {ret}. La matrice $T$ est de rang "
+          f"{np.linalg.matrix_rank(T.astype(float))} sur 64.\n"
+          f"\\item \\textbf{{Forme réduite.}} La ligne $(f, t, k, c, f', t') = ({', '.join(map(str, m6[0]))})$ "
+          f"donne {'les ' + str(len(ecr)) + ' écritures'} ${',\\ '.join(ecr)}$.\n"
+          f"\\item \\textbf{{Plan.}} Le coup appartient au plan $p = {p}$ (« {PLANS_NOMS[p]} »), de décalage "
+          f"$\\delta_p = {delta:+d}$, et $t = f + \\delta_p = {f} {delta:+d} = {t}$.\n"
+          f"\\end{{itemize}}")
 
 
 def composition():
@@ -484,10 +524,6 @@ def lots():
         s.set_visible(False)
     save(fig, "lots")
     write("lots", "\\texttt{coups} = " + pm(m))
-
-
-PLANS_NOMS = ([f"{d}{k}" for d in ("NO", "NE", "SO", "SE", "N", "S", "O", "E") for k in range(1, 8)]
-              + [f"C{k}" for k in range(1, 9)] + ["P1", "P2", "PxO", "PxE", "O-O", "O-O-O"])
 
 
 def plans():
@@ -805,10 +841,212 @@ def experiences():
           f"[${elo(tot / n - 1.96 * se):+.0f}$ ; ${elo(tot / n + 1.96 * se):+.0f}$]")
 
 
+# ----------------------------------------------------------------------------------- légalité, évaluation
+
+def clouage():
+    b = np.zeros((8, 8), int)
+    for s, v in (("e1", 6), ("e2", 2), ("e8", -4), ("g8", -6), ("a2", 1)):
+        b[idx(s) // 8, idx(s) % 8] = v
+    g = Game(b, turn=WHITE, castling="")
+    f = idx("e2")
+    pseudo = [m for m in g.pseudo_legal() if m[0] == f]
+    legal = [m for m in g.legal_moves() if m[0] == f]
+    B, cr, ep = ge.from_game(g, DEV)
+    _, mv, *_ = ge.expand(B, cr, ep, WHITE)
+    assert sorted(to_uci(ge.to_move(x)) for x in mv.tolist()) == sorted(to_uci(x) for x in g.legal_moves())
+    apres = (move_matrix(f, idx("c3")) @ b.reshape(64)).reshape(8, 8)
+    att = attacked_by(apres, -1)
+    assert in_check(apres, WHITE)
+    fig, ax = plt.subplots(1, 3, figsize=(10, 3.4))
+    board(ax[0], b, "Coups pseudo-légaux du cavalier e2", mask=piece_moves(b, f // 8, f % 8))
+    board(ax[1], apres, "Après Cc3 : cases attaquées par les noirs", arrow=(f, idx("c3")),
+          colors={8 * i + j: "#d6453d" for i, j in zip(*np.nonzero(att))})
+    grid(ax[2], (att & (apres == KING)).astype(int), "$\\mathrm{att}_{\\text{noirs}} \\odot [B' = 6]$",
+         hi=ones("#d6453d88"))
+    save(fig, "clouage")
+    write("clouage", f"Le cavalier a {len(pseudo)} coups pseudo-légaux et {'aucun' if not legal else len(legal)} coup légal. La position compte "
+          f"{len(g.pseudo_legal())} coups pseudo-légaux et {len(g.legal_moves())} coups légaux. Le générateur par lots "
+          f"en trouve {len(mv)}, les mêmes.")
+
+
+def evaluation():
+    E = ge._eval_table(DEV)
+    noms = {1: "pion", 2: "cavalier"}
+    fig, ax = plt.subplots(1, 2, figsize=(8, 3.6))
+    for a, p in zip(ax, (1, 2)):
+        tab = np.array(ge.PST[p]).reshape(8, 8)
+        lim = abs(tab).max()
+        grid(a, tab, f"Table du {noms[p]} blanc (valeur de base {ge.VALUE[p]})", size=6,
+             hi=lambda i, j, v, lim=lim: (f"#1baf7a{int(110 * v / lim):02x}" if v > 0
+                                          else f"#eb6834{int(110 * -v / lim):02x}" if v < 0 else None))
+    fig.tight_layout()
+    save(fig, "evaluation")
+
+    def ev(*ucis):
+        g = play(*ucis)
+        B, _, _ = ge.from_game(g, DEV)
+        return int(ge.evaluate(B, WHITE, E)[0])
+    g = play()
+    B, _, _ = ge.from_game(g, DEV)
+    onehot = torch.zeros(13, 65)
+    onehot[B[0].long() + 6, torch.arange(65)] = 1
+    assert int((onehot * E).sum()) == ev()
+    write("evaluation", f"e(\\text{{départ}}) = {ev()},\\qquad e(\\text{{après 1.e4}}) = {ev('e2e4'):+d},\\qquad "
+          f"e(\\text{{après 1.e4 d5 2.exd5}}) = {ev('e2e4', 'd7d5', 'e4d5'):+d}")
+
+
+# ----------------------------------------------------------------------------------- architecture, noyaux
+
+MODULES = [  # (fichier, rôle, couche)
+    ("engine.py", "Référence : masques par décalages, matrices $T$ denses, \\code{Game}, nulles", "numpy"),
+    ("reduced.py", "Forme réduite : plateaux $(N, 65)$, coups $(N, 6)$, étiquettes de $G$", "numpy"),
+    ("reduced_gpu.py", "La même forme réduite en PyTorch, masques d'attaque par lots", "torch"),
+    ("gpu_engine.py", "70 plans, décodage, \\code{expand}, \\code{perft}, évaluation, \\code{Searcher}", "torch"),
+    ("gpu_kernels.py", "Noyau CUDA fusionné : coups légaux en bitboards, un fil par parent", "CUDA"),
+    ("retro.py", "Relation arrière, prédécesseurs, rencontre au milieu, prédicats de mat", "numpy"),
+    ("impose.py", "Synthèse des buts et imposition d'une condition finale", "numpy"),
+    ("invert_full_game.py", "Espace à 94 dimensions, inversion d'une partie entière", "numpy"),
+    ("validate.py", "Comparaison des coups légaux et des nulles avec \\code{python-chess}", "outil"),
+    ("bench_gpu.py", "Perft sur GPU contre \\code{go perft} de Stockfish", "outil"),
+    ("match.py", "Matchs contre Stockfish bridé, pendule, journal par coup", "outil"),
+    ("duel.py", "Duel apparié entre deux réglages, écart d'Elo et intervalle", "outil"),
+    ("analyse.py", "Évaluation Stockfish de chaque coup, filtre de qualité", "outil"),
+    ("webapp.py", "Interface web : parties, matrices $T$ et $G$, retour arrière", "outil"),
+]
+
+
+def architecture():
+    src = os.path.join(ROOT, "src", "matrix_chess")
+    noms = [m for m, _, _ in MODULES]
+    deps, lignes = {}, {}
+    for m in noms:
+        txt = open(os.path.join(src, m)).read()
+        lignes[m] = txt.count("\n")
+        deps[m] = sorted({n for n in noms if n != m and (f"from .{n[:-3]} import" in txt or f"import {n[:-3]}" in txt)})
+    pos = {"engine.py": (6, 3), "reduced.py": (1.2, 2), "reduced_gpu.py": (3.6, 2), "gpu_kernels.py": (6, 2),
+           "retro.py": (8.4, 2), "invert_full_game.py": (10.8, 2), "webapp.py": (1.2, 1), "gpu_engine.py": (4.8, 1),
+           "impose.py": (8.4, 1), "validate.py": (10.8, 1), "bench_gpu.py": (1.2, 0), "match.py": (3.6, 0),
+           "duel.py": (6, 0), "analyse.py": (8.4, 0)}
+    teinte = {"numpy": C[0], "torch": C[1], "CUDA": "#9a5bd0", "outil": MUTED}
+    fig, ax = plt.subplots(figsize=(10.5, 3.6))
+    for m, (x, y) in pos.items():
+        for d in deps[m]:
+            if d in ("engine.py", "validate.py"):  # tout en dépend : dit dans la légende, pas tracé
+                continue
+            x2, y2 = pos[d]
+            ax.annotate("", xy=(x2 + (1.05 if y2 == y else 0), y2 - .2 if y2 > y else y2 + .2 if y2 < y else y2),
+                        xytext=(x - (1.05 if y2 == y else 0), y + .2 if y2 > y else y - .2 if y2 < y else y),
+                        arrowprops=dict(arrowstyle="-|>", color=MUTED, lw=1, shrinkA=0, shrinkB=0))
+    for m, _, couche in MODULES:
+        x, y = pos[m]
+        ax.add_patch(matplotlib.patches.FancyBboxPatch((x - 1.05, y - .2), 2.1, .4, boxstyle="round,pad=0.02",
+                                                       fc="white", ec=teinte[couche], lw=1.4, zorder=3))
+        ax.text(x, y, m, ha="center", va="center", fontsize=7.5, family="DejaVu Sans Mono", zorder=4)
+    ax.legend(handles=[matplotlib.patches.Patch(fc="white", ec=c, lw=1.4, label=t) for t, c in
+                       (("référence numpy", C[0]), ("PyTorch", C[1]), ("CUDA", "#9a5bd0"), ("outils de mesure", MUTED))],
+              ncol=4, fontsize=7, loc="upper center", bbox_to_anchor=(.5, 1.08))
+    ax.set_xlim(-.2, 12.2), ax.set_ylim(-.4, 3.5), ax.axis("off")
+    save(fig, "architecture")
+    write("modules", "\\begin{tabular}{l r >{\\raggedright\\arraybackslash}p{6.9cm} "
+          ">{\\raggedright\\arraybackslash}p{3.3cm}}\n\\toprule\nModule & Lignes & Rôle & Importe\\\\\n\\midrule\n"
+          + "\\\\\n".join(
+        f"\\code{{{m.replace('_', chr(92) + '_')}}} & {lignes[m]} & {role} & "
+        f"{', '.join(chr(92) + 'code{' + d[:-3].replace('_', chr(92) + '_') + '}' for d in deps[m]) or 'aucun'}"
+        for m, role, _ in MODULES) + "\\\\\n\\bottomrule\n\\end{tabular}")
+    write("lignes_total", str(sum(lignes.values())))
+
+
+def pipeline():
+    """Les formes des tenseurs le long de expand_torch, sur un vrai lot, et les trois passes du noyau."""
+    g = play("e2e4", "e7e5")
+    B, cr, ep = ge.from_game(g, DEV)
+    _, _, B1, cr1, ep1 = ge.expand(B, cr, ep, WHITE)          # lot : les positions après le 2e coup blanc
+    n = len(B1)
+    masque = ge.pseudo_planes(B1, cr1, ep1, -1)
+    par, m, double = ge.decode(masque, B1, ep1, -1)
+    parent, coups, fils, _, _ = ge.expand_torch(B1, cr1, ep1, -1)
+    cnt = torch.bincount(parent, minlength=n)
+    off = cnt.cumsum(0) - cnt
+    assert all(ge.expand(B1[i:i + 1], cr1[i:i + 1], ep1[i:i + 1], -1, count_only=True) == int(cnt[i]) for i in range(n))
+    fig, ax = plt.subplots(2, 1, figsize=(9.5, 3.4), gridspec_kw=dict(height_ratios=[1.5, 1]))
+    ax[0].bar(range(n), cnt.tolist(), color=C[0], width=.8)
+    for i, v in enumerate(cnt.tolist()):
+        ax[0].text(i, v + .4, str(v), ha="center", fontsize=5.5)
+    ax[0].set_ylabel("fils par parent"), ax[0].set_xlim(-.7, n - .3), ax[0].set_ylim(0, int(cnt.max()) + 5)
+    ax[0].set_xticks(range(n), range(n), fontsize=5.5)
+    ax[0].set_title("Passe 1 : chaque fil compte les coups légaux de son parent", fontsize=8)
+    ax[0].spines[["top", "right"]].set_visible(False)
+    for i in range(n):
+        ax[1].add_patch(plt.Rectangle((int(off[i]), 0), int(cnt[i]), 1, fc=C[i % 2] + "aa", ec="white", lw=.4))
+        if i % 4 == 0:
+            ax[1].text(int(off[i]), 1.08, str(int(off[i])), fontsize=5.5, ha="center")
+    ax[1].set_xlim(0, int(cnt.sum())), ax[1].set_ylim(0, 1.5), ax[1].set_yticks([])
+    ax[1].set_xlabel("Passes 2 et 3 : la somme préfixe donne à chaque parent sa place dans le tableau des fils")
+    for s in ("top", "right", "left"):
+        ax[1].spines[s].set_visible(False)
+    fig.tight_layout()
+    save(fig, "passes")
+    write("pipeline", "\\begin{tabular}{llr}\\toprule étape & objet & forme\\\\\\midrule\n"
+          f"entrée & plateaux \\code{{B}}, droits \\code{{cr}}, cases \\code{{ep}} & $({n}, 65)$, $({n}, 4)$, $({n})$\\\\\n"
+          f"\\code{{pseudo\\_planes}} & masque booléen & $({n}, 70, 64)$\\\\\n"
+          f"\\code{{decode}} & indice du parent et coups pseudo-légaux & $({len(m)})$, $({len(m)}, 6)$\\\\\n"
+          f"\\code{{apply\\_moves}} & plateaux candidats & $({len(m)}, 65)$\\\\\n"
+          f"\\code{{in\\_check}} & masque de légalité & $({len(m)})$, dont {len(coups)} vrais\\\\\n"
+          f"sortie & parents, coups, fils, droits, cases & $({len(coups)})$, $({len(coups)}, 6)$, $({len(coups)}, 65)$, "
+          "\\dots\\\\\\bottomrule\\end{tabular}")
+    write("passes", f"{n} parents, de {int(cnt.min())} à {int(cnt.max())} fils chacun, {int(cnt.sum())} fils au total")
+
+
+def code_coup():
+    champs = [("f", 6, C[0]), ("t", 6, C[1]), ("k", 3, C[2]), ("e.p.", 1, "#9a5bd0"), ("O-O", 1, MUTED),
+              ("O-O-O", 1, INK), ("indice du parent", 14, "#bdbbb5")]
+    fig, ax = plt.subplots(figsize=(9, 1.3))
+    x = 0
+    for nom, w, c in champs:
+        ax.add_patch(plt.Rectangle((x, 0), w, 1, fc=c, ec="white", lw=1, alpha=.85))
+        ax.text(x + w / 2, .5, nom, ha="center", va="center", fontsize=7 if w > 1 else 5,
+                color="white" if c != "#bdbbb5" else INK, rotation=0 if w > 1 else 90)
+        ax.text(x, -.28, str(x), ha="center", fontsize=6, color=MUTED)
+        x += w
+    ax.text(x, -.28, "63", ha="center", fontsize=6, color=MUTED)
+    ax.text(x - 7, .5, "(bits 18 à 63)", ha="center", va="center", fontsize=6, color=INK, alpha=0)
+    ax.set_xlim(-.5, x + .5), ax.set_ylim(-.5, 1.1), ax.axis("off")
+    save(fig, "code_coup")
+    i, f, t, k = 3, idx("e2"), idx("e4"), 1
+    code = i << 18 | k << 12 | t << 6 | f
+    assert (code & 63, (code >> 6) & 63, (code >> 12) & 7, code >> 18) == (f, t, k, i)
+    write("code_coup", f"\\text{{code}} = {i}\\cdot 2^{{18}} + {k}\\cdot 2^{{12}} + {t}\\cdot 2^{{6}} + {f} = {code}")
+
+
+def tables_exp():
+    r = [x for x in lire("2026-11-24_increment2", "recherche", "tri_vagues_gpu.csv")
+         if x["mesure"] == "profondeur" and x["d_ou_budget"] == "6"]
+    variantes = ["ybw:statique", "hybride:statique", "ybw:mvv", "adaptatif:mvv", "adaptatif:historique"]
+    lignes = []
+    for p in dict.fromkeys(x["pos"] for x in r):
+        ligne = [p]
+        for v in variantes:
+            m = [x for x in r if x["pos"] == p and x["variante"] == v]
+            ligne.append(f"{fr(m[0]['secondes'], '.2f')}~s" if m else "--")
+        lignes.append(" & ".join(ligne))
+    write("tab_recherche", "\\begin{tabular}{lrrrrr}\\toprule position & YBW, statique & hybride, statique & YBW, MVV & "
+          "adaptatif, MVV & adaptatif, hist.\\\\\\midrule\n" + "\\\\\n".join(lignes) + "\\\\\\bottomrule\\end{tabular}")
+    lignes = []
+    for f, lab in (("plein", "pleine largeur"), ("hybride-statique", "hybride, tri statique (incrément 1)"),
+                   ("adaptatif-mvv", "adaptatif, tri MVV/LVA (incrément 2)")):
+        rr = lire("2026-11-24_increment2", "donnees", f"filtre_{f}.csv")
+        p = sorted(float(x["perte_cp"]) for x in rr)
+        lignes.append(" & ".join([lab, fr(mean(p), ".1f"), fr(p[len(p) // 2], ".0f"), f"{sum(x >= 100 for x in p)}~\\%",
+                                  fr(mean(float(x["profondeur"]) for x in rr), ".2f")]))
+    write("tab_filtres", "\\begin{tabular}{lrrrr}\\toprule moteur & perte moyenne (cp) & médiane & $\\ge 100$~cp & "
+          "profondeur\\\\\\midrule\n" + "\\\\\n".join(lignes) + "\\\\\\bottomrule\\end{tabular}")
+
+
 if __name__ == "__main__":
     torch.set_num_threads(max(1, os.cpu_count() // 2))
     for f in (plateau, decalage, roi_cavalier, glisseur, echec, composition, retro, cimetiere, etouffe, lots, plans,
-              vue_roi, bitboard, perft, arbre, intervalles, vagues, experiences):
+              vue_roi, bitboard, perft, arbre, intervalles, vagues, experiences, clouage, evaluation, architecture,
+              pipeline, code_coup, tables_exp):
         f()
         print("ok", f.__name__)
     for c in COUPS:

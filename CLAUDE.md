@@ -31,6 +31,7 @@ python -m src.matrix_chess.analyse parties games.txt --sortie DOSSIER   # évalu
 python -m src.matrix_chess.analyse filtre games.txt -n 30 --depth 3 [--prune --waves hybride] --sortie f.csv  # filtre de qualité du Searcher
 python docs/etudes/2026-11-24_increment1-gpu/gen_figures.py # régénère figures et tableaux du rapport de l'incrément 1
 cd docs/etudes/2026-11-24_increment1-gpu && latexmk -pdf rapport_gpu.tex  # compile ce rapport (latexmk -c pour nettoyer)
+python docs/etudes/2026-11-25_synthese/gen_figures.py         # figures et exemples du rapport de synthèse (synthese.tex)
 python -m src.matrix_chess.webapp                           # UI web → http://127.0.0.1:8000
 
 # Phases réseaux (scripts directs, pas des modules)

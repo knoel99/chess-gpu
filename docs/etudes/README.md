@@ -11,6 +11,7 @@ Les documents de théorie, qui restent des références vivantes, demeurent dans
 | 2026-11-23 | Rapport sur le moteur matriciel (générateur de figures seul) | [`2026-11-23_rapport-moteur-matriciel/`](2026-11-23_rapport-moteur-matriciel/) | source LaTeX absente du dépôt |
 | 2026-11-24 | Incrément 1 : moteur matriciel sur GPU, alpha-bêta par lots, matchs contre Stockfish | [`2026-11-24_increment1-gpu/`](2026-11-24_increment1-gpu/) | [`rapport_gpu.pdf`](2026-11-24_increment1-gpu/rapport_gpu.pdf) |
 | 2026-11-24 | Incrément 2 : qualité coup par coup, tri des coups, vagues adaptatives, pendule, duel de 200 parties | [`2026-11-24_increment2/`](2026-11-24_increment2/) | [`rapport_inc2.pdf`](2026-11-24_increment2/rapport_inc2.pdf) |
+| 2026-11-25 | Synthèse pédagogique : du plateau au GPU, la théorie pas à pas, fils conducteurs et hypothèses | [`2026-11-25_synthese/`](2026-11-25_synthese/) | [`synthese.pdf`](2026-11-25_synthese/synthese.pdf) |
 
 Documents de théorie, par date de création : [`docs/model.md`](../model.md) et
 [`docs/king_matrix.md`](../king_matrix.md) (2026-02-15), [`docs/matrix_chess.md`](../matrix_chess.md)
@@ -150,3 +151,27 @@ par partie et les trois filtres. Les coups des parties du duel n'ont pas été r
 `analyse/` contient l'analyse coup par coup des 62 parties de l'incrément 1, et `recherche/` les
 mesures de tri et de vagues sur GPU.
 
+---
+
+## 2026-11-25 — Synthèse : jouer aux échecs avec des matrices
+
+**Question.** Comment expliquer tout le projet d'une traite, de l'échiquier au GPU, en montant en
+complexité par l'exemple ?
+
+**Contenu.** Un rapport de 23 pages, chaque notion partant d'une position concrète puis passant à
+l'écriture formelle :
+- une position est une matrice, un déplacement est un décalage (roi et cavalier comme
+  convolutions, pièces glissantes comme propagation, échec comme produit élément par élément) ;
+- un coup est une matrice $T = I - E_{ff} - E_{tt} + k\,E_{tf}$ (coup simple, prise, promotion,
+  prise en passant, roque), une partie est un produit, la prise détruit de l'information ;
+- l'inversion par cimetière (matrices monomiales), la relation arrière et l'imposition d'un mat
+  étouffé ;
+- les lots sur GPU (70 plans, test d'échec vu du roi, bitboards, perft) ;
+- la recherche comme produit $(\max, +)$, l'alpha-bêta comme règle d'arrêt d'une convergence
+  d'intervalles $[L, U]$, les vagues par lots.
+
+Les expériences sont résumées en cinq fils conducteurs, suivis de sept hypothèses classées, chacune
+avec son protocole de mesure.
+
+**Données.** Aucune nouvelle mesure. `gen_figures.py` calcule les figures et les exemples chiffrés
+depuis le moteur et depuis les données figées des incréments 1 et 2.

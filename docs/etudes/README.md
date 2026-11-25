@@ -158,7 +158,7 @@ mesures de tri et de vagues sur GPU.
 **Question.** Comment expliquer tout le projet d'une traite, de l'échiquier au GPU, en montant en
 complexité par l'exemple ?
 
-**Contenu.** Un rapport de 23 pages, chaque notion partant d'une position concrète puis passant à
+**Contenu.** Un rapport de 24 pages, chaque notion partant d'une position concrète puis passant à
 l'écriture formelle :
 - une position est une matrice, un déplacement est un décalage (roi et cavalier comme
   convolutions, pièces glissantes comme propagation, échec comme produit élément par élément) ;

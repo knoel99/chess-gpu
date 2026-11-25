@@ -244,7 +244,7 @@ def roi_cavalier():
     board(ax[0, 0], zk, "Roi en e4 : 8 décalages", mask=step_attacks(e4, KING_DIRS))
     za = z.copy()
     za[7, 0] = KING
-    board(ax[0, 1], za, "Roi en a1 : le bord coupe", mask=step_attacks(a1, KING_DIRS))
+    board(ax[0, 1], za, "Roi en a1 : 3 cases", mask=step_attacks(a1, KING_DIRS))
     grid(ax[0, 2], mob_k, "Cases atteintes : $\\sum_d \\mathrm{shift}(\\mathbf{1}, d)$",
          hi=lambda i, j, v: {3: "#fbe2d3", 5: "#f3f2ee", 8: "#d9e7f8"}[v], ticks=False)
     grid(ax[0, 3], D, "Distance du roi depuis e4 (dilatations)", hi=lambda i, j, v: f"#2a78d6{max(0, 70 - 14 * v):02x}",
@@ -299,7 +299,7 @@ def echec():
     att = attacked_by(b, WHITE)
     king = b == -KING
     fig, ax = plt.subplots(1, 4, figsize=(12, 3.3))
-    board(ax[0], b, "Après 4.Dxf7 : le roi noir")
+    board(ax[0], b, "Après 4.Dxf7, mat")
     grid(ax[1], att.astype(int), "$\\mathrm{att}_{\\text{blancs}}$ (masque attaqué)", hi=ones(C[1] + "55"))
     grid(ax[2], king.astype(int), "$[B = -6]$ : le roi noir", hi=ones(C[0] + "66"))
     grid(ax[3], (att & king).astype(int), "Produit élément par élément", hi=ones("#d6453d88"))
@@ -344,8 +344,8 @@ def coup(key, before, uci):
     save(fig, "coup_" + key)
     names = [name(i) for i in Sq]
     rb = (R @ after)[Sq]
-    ret = ("on retrouve exactement $b_S$" if np.array_equal(rb, flat[Sq])
-           else "la pièce prise n'est pas restituée : l'information est perdue")
+    ret = ("$R$ rend $b_S$ sans perte" if np.array_equal(rb, flat[Sq])
+           else "$R$ ne rend pas la pièce prise, dont la valeur est perdue")
     fn = (lambda x: str(int(x)) if float(x).is_integer() else f"\\tfrac{{1}}{{{int(round(1 / x))}}}")
     write("coup_" + key,
           f"\\[ S = ({', '.join(f'{n}={i}' for n, i in zip(names, Sq))}),\\quad "
@@ -353,7 +353,7 @@ def coup(key, before, uci):
           f"\\;\\longmapsto\\; (Tb)_S = {pm(after[Sq].reshape(-1, 1))} \\]\n"
           f"\\[ R_S = {pm(R[np.ix_(Sq, Sq)], fn)},\\qquad (R\\,b')_S = {pm(rb.reshape(-1, 1))}"
           f" \\]\n"
-          f"Ici, {ret}. Rang de $T$ : {np.linalg.matrix_rank(T.astype(float))} sur 64.")
+          f"Ici, {ret}. La matrice $T$ est de rang {np.linalg.matrix_rank(T.astype(float))} sur 64.")
 
 
 def composition():
@@ -383,9 +383,9 @@ def composition():
     board(ax[0], g.board, "Après 4…dxc6 : étiquettes $(\\mathrm{src}, \\mathrm{coef})$ de $G$", labels=lab, colors=col)
     big(ax[1], G, [i for i in range(64) if i in lab], "$G = T_8 \\cdots T_1$")
     save(fig, "composition")
-    write("composition", f"Rang de $G$ : {rank} sur 64. Colonnes nulles de $G$ (pièces initiales effacées) : "
-          f"{', '.join(perdues)}. Lignes nulles (cases vidées) : "
-          f"{', '.join(name(i) for i in range(64) if coef[i] == 0)}.")
+    write("composition", f"$G$ est de rang {rank} sur 64. Ses lignes nulles sont les cases vidées "
+          f"({', '.join(name(i) for i in range(64) if coef[i] == 0)}). Parmi ses colonnes nulles, {len(perdues)} "
+          f"portaient une pièce au départ, {' et '.join(perdues)}, les deux pièces prises.")
     write("partie_ruy", " ".join(ucis))
 
 
@@ -401,7 +401,7 @@ def retro():
           colors={idx("e5"): C[1]})
     for a, (p, m) in zip(ax[1:], from_d3):
         c = int(p[idx("e5") // 8, idx("e5") % 8])
-        board(a, p, f"$c = {c}$ : Cd3 prend\n{noms[c]}" if c else "$c = 0$ : Cd3–e5\nsans prise", size=11,
+        board(a, p, f"$c = {c}$ : Cd3 prend\n{noms[c]}" if c else "$c = 0$ : Cd3-e5\nsans prise", size=11,
               coords=False, colors={idx("d3"): C[0], idx("e5"): "#d6453d" if c else None}, arrow=(m[0], m[1]))
         q = Game(p, turn=WHITE, castling="")
         q.push(find(q, to_uci(m)))
@@ -409,8 +409,8 @@ def retro():
     fig.tight_layout()
     save(fig, "retro")
     orig = sorted({name(m[0]) for _, m in pre})
-    write("retro", f"{len(pre)} prédécesseurs légaux à un demi-coup, depuis {len(orig)} cases d'origine "
-          f"({', '.join(orig)}) ; {len(from_d3)} d'entre eux partent de d3.")
+    write("retro", f"le moteur trouve {len(pre)} prédécesseurs légaux à un demi-coup, issus de {len(orig)} cases "
+          f"d'origine ({', '.join(orig)}). Parmi eux, {len(from_d3)} partent de d3.")
 
 
 def cimetiere():
@@ -528,7 +528,8 @@ def plans():
           "\\begin{tabular}{rlrlrl}\\toprule plan $p$ & nom & départ $f$ & case & $t = f + \\delta_p$ & coup\\\\\\midrule\n"
           + "\\\\\n".join(f"{p} & {labels[p]} & {f} & {name(f)} & {t} & \\texttt{{{name(f)}{name(t)}}}" for p, f, t in ex)
           + "\\\\\\bottomrule\\end{tabular}")
-    write("plans_total", f"{int(cnt.sum())} coups pseudo-légaux, dont {len(mv)} légaux")
+    write("plans_total", f"{int(cnt.sum())} coups pseudo-légaux" + (", tous légaux" if len(mv) == int(cnt.sum())
+                                                                    else f", dont {len(mv)} légaux"))
 
 
 def vue_roi():
@@ -549,9 +550,9 @@ def vue_roi():
     ax.legend(handles=[matplotlib.patches.Patch(color=c, alpha=.75, label=t) for _, c, t in leg], ncol=4,
               fontsize=6, loc="upper center", bbox_to_anchor=(.5, -.06), handlelength=1)
     save(fig, "vue_roi")
-    write("vue_roi", f"{n['rays'][0]} indices de rayons ({n['rays'][1]} sur le plateau), {n['kn'][0]} sauts de "
-          f"cavalier ({n['kn'][1]}), {n['kg'][0]} voisins ({n['kg'][1]}), {n['pw'][0]} pions ({n['pw'][1]}) : "
-          f"{n['rays'][0] + n['kn'][0] + n['kg'][0] + n['pw'][0]} lectures par plateau.")
+    write("vue_roi", f"Pour le roi en e4, les tables donnent {n['rays'][0]} indices de rayons, dont {n['rays'][1]} "
+          f"sur le plateau, {n['kn'][0]} sauts de cavalier, {n['kg'][0]} voisins et {n['pw'][0]} cases de pion, "
+          f"soit {n['rays'][0] + n['kn'][0] + n['kg'][0] + n['pw'][0]} lectures par plateau.")
 
 
 def bitboard():
@@ -736,7 +737,7 @@ def experiences():
         a.set_xlabel("profondeur"), a.spines[["top", "right"]].set_visible(False), a.grid(color=GRID, lw=.6)
     ax[0].legend(fontsize=6.5)
     ax[0].set_title("Kiwipete : nœuds visités", fontsize=8)
-    ax[1].set_title("Kiwipete : temps (moins de nœuds ≠ plus rapide)", fontsize=8)
+    ax[1].set_title("Kiwipete : temps de calcul sur GPU", fontsize=8)
     save(fig, "exp_noeuds")
 
     s = lire("2026-11-24_increment1-gpu", "donnees", "summary.csv")
